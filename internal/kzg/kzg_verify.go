@@ -97,6 +97,44 @@ func Verify(commitment *Commitment, proof *OpeningProof, openKey *OpeningKey) er
 	return nil
 }
 
+// This is the gnark-crypto way, which is slightly more efficient.
+func GnarkVerify(commitment *Commitment, proof *OpeningProof, openKey *OpeningKey) error {
+	// [f(z)]G₁
+	var claimedValueG1Jac bls12381.G1Jac
+	var claimedValueBigInt big.Int
+	proof.ClaimedValue.BigInt(&claimedValueBigInt)
+	claimedValueG1Jac.ScalarMultiplicationAffine(&openKey.GenG1, &claimedValueBigInt)
+
+	// [f(α) - f(z)]G₁
+	var fminusfzG1Jac bls12381.G1Jac
+	fminusfzG1Jac.FromAffine(commitment)
+	fminusfzG1Jac.SubAssign(&claimedValueG1Jac)
+	//zW
+	var pointBigInt big.Int
+	proof.InputPoint.BigInt(&pointBigInt)
+	claimedValueG1Jac.ScalarMultiplicationAffine(&proof.QuotientCommitment, &pointBigInt)
+	//+ zW
+	fminusfzG1Jac.AddAssign(&claimedValueG1Jac)
+
+	// -([f(α) - f(z)]G₁ + zW) (Convert to Affine format)
+	var fminusfzG1Aff bls12381.G1Affine
+	fminusfzG1Aff.FromJacobian(&fminusfzG1Jac)
+	fminusfzG1Aff.Neg(&fminusfzG1Aff)
+
+	check, err := bls12381.PairingCheck(
+		[]bls12381.G1Affine{fminusfzG1Aff, proof.QuotientCommitment},
+		[]bls12381.G2Affine{openKey.GenG2, openKey.AlphaG2},
+	)
+	if err != nil {
+		return err
+	}
+	if !check {
+		return ErrVerifyOpeningProof
+	}
+
+	return nil
+}
+
 // BatchVerifyMultiPoints verifies multiple KZG proofs in a batch. See [verify_kzg_proof_batch].
 //
 //   - This method is more efficient than calling [Verify] multiple times.
