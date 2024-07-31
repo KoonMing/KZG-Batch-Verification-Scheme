@@ -6,8 +6,11 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"math/big"
 	"testing"
 
+	"github.com/consensys/gnark-crypto/ecc"
+	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
 	"github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
 	goethkzg "github.com/crate-crypto/go-eth-kzg"
 	"github.com/crate-crypto/go-eth-kzg/internal/kzg"
@@ -45,8 +48,149 @@ func GetRandBlob(seed int64) *goethkzg.Blob {
 	return &blob
 }
 
+func BenchmarkPointOperations(b *testing.B) {
+	const length = 32
+	blobs := make([]goethkzg.Blob, length)
+	commitments := make([]goethkzg.KZGCommitment, length)
+	//proofs := make([]goethkzg.KZGProof, length)
+	fields := make([]goethkzg.Scalar, length)
+	A := make([]bls12381.G1Affine, length)
+	J := make([]bls12381.G1Jac, length)
+	x := make([]fr.Element, length)
+	s := make([]big.Int, length)
+
+	seq := make([]fr.Element, length)
+	u := make([]big.Int, length)
+
+	for i := 0; i < length; i++ {
+		blob := GetRandBlob(int64(i))
+		commitment, err := ctx.BlobToKZGCommitment(blob, NumGoRoutines)
+		require.NoError(b, err)
+		//proof, err := ctx.ComputeBlobKZGProof(blob, commitment, NumGoRoutines)
+		//require.NoError(b, err)
+
+		blobs[i] = *blob
+		commitments[i] = commitment
+		A[i], _ = goethkzg.DeserializeKZGCommitment(commitment)
+		J[i].FromAffine(&A[i])
+		//proofs[i] = proof
+		fields[i] = GetRandFieldElement(int64(i))
+		x[i], _ = goethkzg.DeserializeScalar(fields[i])
+		x[i].BigInt(&s[i])
+
+		if i == 0 {
+			seq[i].SetOne()
+		} else {
+			seq[i].Add(&seq[i-1], &seq[0])
+		}
+		seq[i].BigInt(&u[i])
+	}
+
+	b.Run("AffineAdd", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			A[0].Add(&A[0], &A[1])
+			//_ = ctx.VerifyKZGProof(commitments[0], fields[0], fields[1], proofs[0])
+		}
+	})
+
+	b.Run("JacobAdd", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			J[0].AddAssign(&J[1])
+		}
+	})
+
+	b.Run("AffineMultiply", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			A[0].ScalarMultiplication(&A[0], &s[0])
+			//_ = ctx.VerifyKZGProof(commitments[0], fields[0], fields[1], proofs[0])
+		}
+	})
+
+	b.Run("JacobMultiply", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			J[0].ScalarMultiplication(&J[0], &s[0])
+		}
+	})
+
+	b.Run("AffineMulD&A", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			kzg.MulByDoubleAndAdd(&A[0], &s[0])
+		}
+	})
+
+	b.Run("AffineMultiplySmall", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			A[0].ScalarMultiplication(&A[0], &u[2])
+		}
+	})
+
+	b.Run("JacobMultiplySmall", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			J[0].ScalarMultiplication(&J[0], &u[2])
+		}
+	})
+
+	b.Run("AffineMulD&ASmall", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			kzg.MulByDoubleAndAdd(&A[0], &u[2])
+		}
+	})
+
+	config := ecc.MultiExpConfig{}
+	b.Run("AffineMultiExp", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			A[0].MultiExp(A, x, config)
+		}
+	})
+
+	b.Run("JacobMultiExp", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			J[0].MultiExp(A, x, config)
+		}
+	})
+
+	b.Run("AffineMultiMulD&A", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			kzg.MultiMul(A, x)
+		}
+	})
+
+	b.Run("AffineMultiExpSmall", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			A[0].MultiExp(A, seq, config)
+			//_ = ctx.VerifyKZGProof(commitments[0], fields[0], fields[1], proofs[0])
+		}
+	})
+
+	b.Run("JacobMultiExpSmall", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			J[0].MultiExp(A, seq, config)
+		}
+	})
+
+	b.Run("AffineMultiMulD&ASmall", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			kzg.MultiMul(A, seq)
+		}
+	})
+}
+
 func Benchmark(b *testing.B) {
-	const length = 64
+	const length = 32
 	blobs := make([]goethkzg.Blob, length)
 	commitments := make([]goethkzg.KZGCommitment, length)
 	proofs := make([]goethkzg.KZGProof, length)
@@ -97,12 +241,54 @@ func Benchmark(b *testing.B) {
 		}
 	})
 
+	b.Run("NewVerifyKZGProof", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			_ = ctx.NewVerifyKZGProof(commitments[0], fields[0], fields[1], proofs[0])
+		}
+	})
+
 	b.Run("VerifyBlobKZGProof", func(b *testing.B) {
 		b.ReportAllocs()
 		for n := 0; n < b.N; n++ {
 			_ = ctx.VerifyBlobKZGProof(&blobs[0], commitments[0], proofs[0])
 		}
 	})
+
+	b.Run("NewVerifyBlobKZGProof", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			_ = ctx.NewVerifyBlobKZGProof(&blobs[0], commitments[0], proofs[0])
+		}
+	})
+
+	for i := 1; i <= len(blobs); i *= 2 {
+		b.Run(fmt.Sprintf("OriBatch(count=%v)", i), func(b *testing.B) {
+			commitments, openingProofs, _ := ctx.GenTest(blobs[:i], commitments[:i], proofs[:i])
+			b.ReportAllocs()
+			for n := 0; n < b.N; n++ {
+				_ = ctx.OriTest(commitments, openingProofs)
+			}
+		})
+	}
+	for i := 1; i <= len(blobs); i *= 2 {
+		b.Run(fmt.Sprintf("NewBatch(count=%v)", i), func(b *testing.B) {
+			commitments, openingProofs, _ := ctx.GenTest(blobs[:i], commitments[:i], proofs[:i])
+			b.ReportAllocs()
+			for n := 0; n < b.N; n++ {
+				_ = ctx.NewTest(commitments, openingProofs)
+			}
+		})
+	}
+	for i := 1; i <= len(blobs); i *= 2 {
+		b.Run(fmt.Sprintf("TempBatch(count=%v)", i), func(b *testing.B) {
+			commitments, openingProofs, _ := ctx.GenTest(blobs[:i], commitments[:i], proofs[:i])
+			b.ReportAllocs()
+			for n := 0; n < b.N; n++ {
+				_ = ctx.TempTest(commitments, openingProofs)
+			}
+		})
+	}
 
 	for i := 1; i <= len(blobs); i *= 2 {
 		b.Run(fmt.Sprintf("VerifyBlobKZGProofBatch(count=%v)", i), func(b *testing.B) {

@@ -20,22 +20,15 @@ func TestProofVerifySmoke(t *testing.T) {
 	point := samplePointOutsideDomain(*domain)
 	proof, _ := Open(domain, poly, *point, &srs.CommitKey, 0)
 
-	//start := time.Now().UnixNano()
 	err := Verify(comm, &proof, &srs.OpeningKey)
-	//end := time.Now().UnixNano() - start
 	if err != nil {
 		t.Error("proof failed to verify")
 	}
 
-	//startt := time.Now().UnixNano()
-	erro := GnarkVerify(comm, &proof, &srs.OpeningKey)
-	//endd := time.Now().UnixNano() - startt
+	erro := NewVerify(comm, &proof, &srs.OpeningKey)
 	if erro != nil {
 		t.Error("proof failed to verify")
-	} //else {
-	//	t.Error("Ori time take is   ", end, "ns")
-	//	t.Error("Gnark time take is ", endd, "ns")
-	//}
+	}
 }
 
 func TestBatchVerifySmoke(t *testing.T) {
@@ -53,6 +46,12 @@ func TestBatchVerifySmoke(t *testing.T) {
 
 	// Check that these verify successfully.
 	err := BatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
+	require.NoError(t, err)
+
+	err = TempBatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
+	require.NoError(t, err)
+
+	err = NewBatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
 	require.NoError(t, err)
 
 	// Add an invalid proof, to ensure that it fails
