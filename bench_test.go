@@ -59,6 +59,11 @@ func BenchmarkPointOperations(b *testing.B) {
 	x := make([]fr.Element, length)
 	s := make([]big.Int, length)
 
+	var randnum fr.Element
+	randnum.SetRandom()
+	var num big.Int
+	randnum.BigInt(&num)
+
 	seq := make([]fr.Element, length)
 	u := make([]big.Int, length)
 
@@ -90,7 +95,6 @@ func BenchmarkPointOperations(b *testing.B) {
 		b.ReportAllocs()
 		for n := 0; n < b.N; n++ {
 			A[0].Add(&A[0], &A[1])
-			//_ = ctx.VerifyKZGProof(commitments[0], fields[0], fields[1], proofs[0])
 		}
 	})
 
@@ -104,7 +108,7 @@ func BenchmarkPointOperations(b *testing.B) {
 	b.Run("AffineMultiply", func(b *testing.B) {
 		b.ReportAllocs()
 		for n := 0; n < b.N; n++ {
-			A[0].ScalarMultiplication(&A[0], &s[0])
+			A[0].ScalarMultiplication(&A[0], &num)
 			//_ = ctx.VerifyKZGProof(commitments[0], fields[0], fields[1], proofs[0])
 		}
 	})
@@ -112,14 +116,14 @@ func BenchmarkPointOperations(b *testing.B) {
 	b.Run("JacobMultiply", func(b *testing.B) {
 		b.ReportAllocs()
 		for n := 0; n < b.N; n++ {
-			J[0].ScalarMultiplication(&J[0], &s[0])
+			J[0].ScalarMultiplication(&J[0], &num)
 		}
 	})
 
 	b.Run("AffineMulD&A", func(b *testing.B) {
 		b.ReportAllocs()
 		for n := 0; n < b.N; n++ {
-			kzg.MulByDoubleAndAdd(&A[0], &s[0])
+			kzg.MulByDoubleAndAdd(&A[0], &num)
 		}
 	})
 
@@ -170,7 +174,6 @@ func BenchmarkPointOperations(b *testing.B) {
 		b.ReportAllocs()
 		for n := 0; n < b.N; n++ {
 			A[0].MultiExp(A, seq, config)
-			//_ = ctx.VerifyKZGProof(commitments[0], fields[0], fields[1], proofs[0])
 		}
 	})
 
