@@ -98,32 +98,64 @@ func Verify(commitment *Commitment, proof *OpeningProof, openKey *OpeningKey) er
 	return nil
 }
 
-// This is the gnark-crypto way, which is slightly more efficient.
 func NewVerify(commitment *Commitment, proof *OpeningProof, openKey *OpeningKey) error {
 	// [f(z)]G₁
 	var claimedValueG1Jac bls12381.G1Jac
-	var claimedValueBigInt big.Int
-	proof.ClaimedValue.BigInt(&claimedValueBigInt)
-	claimedValueG1Jac.ScalarMultiplicationAffine(&openKey.GenG1, &claimedValueBigInt)
+	var f_z big.Int
+	proof.ClaimedValue.BigInt(&f_z)
+	f_z.Neg(&f_z)
+
+	var z big.Int
+	proof.InputPoint.BigInt(&z)
+	claimedValueG1Jac.JointScalarMultiplicationBase(&proof.QuotientCommitment, &f_z, &z)
 
 	// [f(α) - f(z)]G₁
-	var fminusfzG1Jac bls12381.G1Jac
-	fminusfzG1Jac.FromAffine(commitment)
-	fminusfzG1Jac.SubAssign(&claimedValueG1Jac)
-	//zW, reuse R variable
-	var pointBigInt big.Int
-	proof.InputPoint.BigInt(&pointBigInt)
-	claimedValueG1Jac.ScalarMultiplicationAffine(&proof.QuotientCommitment, &pointBigInt)
-	//+ zW
-	fminusfzG1Jac.AddAssign(&claimedValueG1Jac)
+	var commJac bls12381.G1Jac
+	commJac.FromAffine(commitment)
+	commJac.AddAssign(&claimedValueG1Jac)
 
 	// -([f(α) - f(z)]G₁ + zW) (Convert to Affine format)
-	var fminusfzG1Aff bls12381.G1Affine
-	fminusfzG1Aff.FromJacobian(&fminusfzG1Jac)
-	fminusfzG1Aff.Neg(&fminusfzG1Aff)
+	var secondPairing bls12381.G1Affine
+	secondPairing.FromJacobian(&commJac)
+	secondPairing.Neg(&secondPairing)
 
 	check, err := bls12381.PairingCheck(
-		[]bls12381.G1Affine{fminusfzG1Aff, proof.QuotientCommitment},
+		[]bls12381.G1Affine{secondPairing, proof.QuotientCommitment},
+		[]bls12381.G2Affine{openKey.GenG2, openKey.AlphaG2},
+	)
+	if err != nil {
+		return err
+	}
+	if !check {
+		return ErrVerifyOpeningProof
+	}
+
+	return nil
+}
+
+// This is the gnark-crypto way, which is slightly more efficient.
+func GnarkVerify(commitment *Commitment, proof *OpeningProof, openKey *OpeningKey) error {
+	// [f(z)]G₁ - [z]W
+	var claimedValueG1Jac bls12381.G1Jac
+
+	var claimedValueBigInt big.Int
+	proof.ClaimedValue.BigInt(&claimedValueBigInt)
+
+	var pointBigInt big.Int
+	proof.InputPoint.BigInt(&pointBigInt)
+	pointBigInt.Neg(&pointBigInt)
+
+	claimedValueG1Jac.JointScalarMultiplicationBase(&proof.QuotientCommitment, &claimedValueBigInt, &pointBigInt)
+
+	// [f(z)]G₁ - [z]W - C (Convert to Affine format)
+	var commJac bls12381.G1Jac
+	commJac.FromAffine(commitment)
+	claimedValueG1Jac.SubAssign(&commJac)
+	var secondPairing bls12381.G1Affine
+	secondPairing.FromJacobian(&claimedValueG1Jac)
+
+	check, err := bls12381.PairingCheck(
+		[]bls12381.G1Affine{secondPairing, proof.QuotientCommitment},
 		[]bls12381.G2Affine{openKey.GenG2, openKey.AlphaG2},
 	)
 	if err != nil {
@@ -238,7 +270,131 @@ func BatchVerifyMultiPoints(commitments []Commitment, proofs []OpeningProof, ope
 	return nil
 }
 
-func TempBatchVerifyMultiPoints(commitments []Commitment, proofs []OpeningProof, openKey *OpeningKey) error {
+/*
+	func TempBatchVerifyMultiPoints(commitments []Commitment, proofs []OpeningProof, openKey *OpeningKey) error {
+		// Check consistency number of proofs is equal to the number of commitments.
+		if len(commitments) != len(proofs) {
+			return ErrInvalidNumDigests
+		}
+		batchSize := len(commitments)
+
+		// If there is nothing to verify, we return nil
+		// to signal that verification was true.
+		//
+		if batchSize == 0 {
+			return nil
+		}
+
+		// If batch size is `1`, call Verify
+		if batchSize == 1 {
+			return NewVerify(&commitments[0], &proofs[0], openKey)
+		}
+
+		// Sample a random number for sampling.
+		//
+		// We only need to sample one random number and
+		// compute a (aritmetic) sequence of that random number. This works
+		// since it resemble a set commitment structure
+		// which is also a batch verifier. See
+		// [Efficient Fork-Free BLS Multi-Signature Scheme with Incremental Signing]
+		var randomNumber fr.Element
+		randomNumber.SetInt64(rand.Int63())
+
+		scalars := make([]fr.Element, batchSize)
+		seq := make([]fr.Element, batchSize)
+		seq[0].SetOne()
+		for i := 1; i < batchSize; i++ {
+			seq[i].Add(&seq[i-1], &seq[0])
+			scalars[i].SetOne()
+		}
+
+		//=========2nd pairing starts
+		// W = \prod W_i
+		var temp1, temp2 bls12381.G1Jac
+		var foldedQuotients bls12381.G1Affine
+		quotients := make([]bls12381.G1Affine, len(proofs))
+		for i := 0; i < batchSize; i++ {
+			quotients[i].Set(&proofs[i].QuotientCommitment)
+		}
+		config := ecc.MultiExpConfig{}
+		_, err := temp2.MultiExp(quotients, scalars, config)
+		if err != nil {
+			return err
+		}
+		// rW
+		var r big.Int
+		randomNumber.BigInt(&r)
+		temp2.ScalarMultiplication(&temp2, &r)
+
+		// + \prod iW_i
+		_, err = temp1.MultiExp(quotients, seq, config)
+		if err != nil {
+			return err
+		}
+		temp2.AddAssign(&temp1)
+		foldedQuotients.FromJacobian(&temp2)
+		//========2nd pairing ends
+
+		//========1st pairing starts
+		// \sum C_i
+		_, err = temp2.MultiExp(commitments, scalars, config)
+		if err != nil {
+			return err
+		}
+
+		bases := make([]bls12381.G1Affine, (2*batchSize)+2)
+		scalars = make([]fr.Element, (2*batchSize)+2)
+		var foldedEvaluations fr.Element
+		evaluations := make([]fr.Element, batchSize)
+
+		for i := 0; i < batchSize; i++ {
+			// r_i = (r + i)
+			evaluations[i].Add(&randomNumber, &seq[i])
+
+			//r_i*(z_i)
+			scalars[i+batchSize].Mul(&evaluations[i], &proofs[i].InputPoint)
+
+			//\sum r_i*f(z_i)
+			evaluations[i].Mul(&evaluations[i], &proofs[i].ClaimedValue)
+			foldedEvaluations.Add(&foldedEvaluations, &evaluations[i])
+
+			bases[i].Set(&commitments[i])
+			bases[i+batchSize].Set(&quotients[i])
+			scalars[i].Set(&seq[i])
+		}
+
+		bases[len(bases)-2].FromJacobian(&temp2)
+		bases[len(bases)-1].Set(&openKey.GenG1)
+
+		scalars[len(bases)-2].Set(&randomNumber)
+		foldedEvaluations.Neg(&foldedEvaluations)
+		scalars[len(bases)-1].Set(&foldedEvaluations)
+
+		// `lhs` first pairing
+		var foldedCommitments bls12381.G1Affine
+		_, err = foldedCommitments.MultiExp(bases, scalars, config)
+		if err != nil {
+			return err
+		}
+
+		// `lhs` second pairing
+		foldedQuotients.Neg(&foldedQuotients)
+
+		check, err := bls12381.PairingCheck(
+			[]bls12381.G1Affine{foldedCommitments, foldedQuotients},
+			[]bls12381.G2Affine{openKey.GenG2, openKey.AlphaG2},
+		)
+		if err != nil {
+			return err
+		}
+		if !check {
+			return ErrVerifyOpeningProof
+		}
+
+		return nil
+	}
+*/
+func NewBatchVerifyMultiPoints(commitments []Commitment, proofs []OpeningProof, openKey *OpeningKey) error {
 	// Check consistency number of proofs is equal to the number of commitments.
 	if len(commitments) != len(proofs) {
 		return ErrInvalidNumDigests
@@ -371,7 +527,7 @@ func TempBatchVerifyMultiPoints(commitments []Commitment, proofs []OpeningProof,
 	return nil
 }
 
-func NewBatchVerifyMultiPoints(commitments []Commitment, proofs []OpeningProof, openKey *OpeningKey) error {
+func InvBatchVerifyMultiPoints(commitments []Commitment, proofs []OpeningProof, openKey *OpeningKey) error {
 	// Check consistency number of proofs is equal to the number of commitments.
 	if len(commitments) != len(proofs) {
 		return ErrInvalidNumDigests
@@ -387,103 +543,70 @@ func NewBatchVerifyMultiPoints(commitments []Commitment, proofs []OpeningProof, 
 
 	// If batch size is `1`, call Verify
 	if batchSize == 1 {
-		return NewVerify(&commitments[0], &proofs[0], openKey)
+		return Verify(&commitments[0], &proofs[0], openKey)
 	}
 
-	// Sample a random number for sampling.
+	// Sample random numbers for sampling.
 	//
 	// We only need to sample one random number and
-	// compute a (aritmetic) sequence of that random number. This works
-	// since it resemble a set commitment structure
-	// which is also a batch verifier. See
-	// [Efficient Fork-Free BLS Multi-Signature Scheme with Incremental Signing]
-	var randomNumber fr.Element
-	randomNumber.SetInt64(rand.Int63())
-
-	seq := make([]fr.Element, uint(batchSize))
-	seq[0].SetOne()
-	for i := 1; i < len(seq); i++ {
-		seq[i].Add(&seq[i-1], &seq[0])
+	// compute powers of that random number. This works
+	// since powers will produce a vandermonde matrix
+	// which is linearly independent.
+	//var randomNumber fr.Element
+	//_, err := randomNumber.SetRandom()
+	//if err != nil {
+	//	return err
+	//}
+	//randomNumbers := utils.ComputePowers(randomNumber, uint(batchSize))
+	randomNumbers := make([]fr.Element, batchSize)
+	for i := 0; i < batchSize; i++ {
+		randomNumbers[i].Inverse(&proofs[i].InputPoint)
 	}
 
-	allone := make([]fr.Element, uint(batchSize))
-	for i := 0; i < len(allone); i++ {
-		allone[i].SetOne()
-	}
-
-	//=========2nd pairing starts
-	// W = \prod W_i
-	var temp1, temp2 bls12381.G1Jac
+	// Combine random_i*quotient_i
 	var foldedQuotients bls12381.G1Affine
 	quotients := make([]bls12381.G1Affine, len(proofs))
 	for i := 0; i < batchSize; i++ {
 		quotients[i].Set(&proofs[i].QuotientCommitment)
 	}
 	config := ecc.MultiExpConfig{}
-	temp2.MultiExp(quotients, allone, config)
-	// rW
-	var r big.Int
-	randomNumber.BigInt(&r)
-	temp2.ScalarMultiplication(&temp2, &r)
-
-	// + \prod iW_i
-	temp1.MultiExp(quotients, seq, config)
-	temp2.AddAssign(&temp1)
-	foldedQuotients.FromJacobian(&temp2)
-	//========2nd pairing ends
-
-	//========1st pairing starts
-	// \prod i(C_i), z = \sum p(z_i)(r + i)
-	evaluations := make([]fr.Element, batchSize)
-	for i := 0; i < len(seq); i++ {
-		evaluations[i].Set(&proofs[i].ClaimedValue)
-	}
-	foldedCommitments, foldedEvaluations, err := newfold(commitments, evaluations, randomNumber, seq)
+	_, err := foldedQuotients.MultiExp(quotients, randomNumbers, config)
 	if err != nil {
 		return err
 	}
 
-	// \sum C_i
-	/*temp2.FromAffine(&commitments[0])
-	for i := 1; i < len(commitments); i++ {
-		temp1.FromAffine(&commitments[i])
-		temp2.AddAssign(&temp1)
-	}*/
-
-	temp2.MultiExp(commitments, allone, config)
-	// r(\sum C_i)
-	temp2.ScalarMultiplication(&temp2, &r)
-
-	// R = zG
-	var foldedEvaluationsBigInt big.Int
-	foldedEvaluations.BigInt(&foldedEvaluationsBigInt)
-	temp1.FromAffine(&openKey.GenG1)
-	temp1.ScalarMultiplication(&temp1, &foldedEvaluationsBigInt)
-
-	// r(\sum C_i) - R
-	temp2.SubAssign(&temp1)
-
-	// r(\sum C_i) + \prod i(C_i) - R
-	temp1.FromAffine(&foldedCommitments)
-	temp2.AddAssign(&temp1)
-
-	// Combine r_i*(z_i)
-	var foldedPointsQuotients bls12381.G1Affine
-	for i := 0; i < batchSize; i++ {
-		seq[i].Add(&seq[i], &randomNumber)
-		seq[i].Mul(&seq[i], &proofs[i].InputPoint)
+	// Fold commitments and evaluations using randomness
+	evaluations := make([]fr.Element, batchSize)
+	for i := 0; i < len(randomNumbers); i++ {
+		evaluations[i].Set(&proofs[i].ClaimedValue)
+	}
+	foldedCommitments, foldedEvaluations, err := fold(commitments, evaluations, randomNumbers)
+	if err != nil {
+		return err
 	}
 
-	_, err = foldedPointsQuotients.MultiExp(quotients, seq, config)
+	// Compute commitment to folded Eval
+	var foldedEvaluationsCommit bls12381.G1Affine
+	var foldedEvaluationsBigInt big.Int
+	foldedEvaluations.BigInt(&foldedEvaluationsBigInt)
+	foldedEvaluationsCommit.ScalarMultiplication(&openKey.GenG1, &foldedEvaluationsBigInt)
+
+	// Compute F = foldedCommitments - foldedEvaluationsCommit
+	foldedCommitments.Sub(&foldedCommitments, &foldedEvaluationsCommit)
+
+	// Combine random_i*(point_i*quotient_i)
+	var foldedPointsQuotients bls12381.G1Affine
+	for i := 0; i < batchSize; i++ {
+		//randomNumbers[i].Mul(&randomNumbers[i], &proofs[i].InputPoint)
+		randomNumbers[i].SetOne()
+	}
+	_, err = foldedPointsQuotients.MultiExp(quotients, randomNumbers, config)
 	if err != nil {
 		return err
 	}
 
 	// `lhs` first pairing
-	temp1.FromAffine(&foldedPointsQuotients)
-	temp2.AddAssign(&temp1)
-	foldedCommitments.FromJacobian(&temp2)
-	//foldedCommitments.Add(&foldedCommitments, &foldedPointsQuotients)
+	foldedCommitments.Add(&foldedCommitments, &foldedPointsQuotients)
 
 	// `lhs` second pairing
 	foldedQuotients.Neg(&foldedQuotients)

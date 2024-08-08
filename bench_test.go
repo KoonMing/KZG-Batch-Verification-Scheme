@@ -190,10 +190,42 @@ func BenchmarkPointOperations(b *testing.B) {
 			kzg.MultiMul(A, seq)
 		}
 	})
+
+	b.Run("AffineMulThenInv", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			A[0].ScalarMultiplication(&A[0], &num)
+			A[0].Neg(&A[0])
+		}
+	})
+
+	b.Run("AffineInvThenMul", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			num.Neg(&num)
+			A[0].ScalarMultiplication(&A[0], &num)
+		}
+	})
+
+	b.Run("JacobMulThenInv", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			J[0].ScalarMultiplication(&J[0], &num)
+			J[0].Neg(&J[0])
+		}
+	})
+
+	b.Run("JacobInvThenMul", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			num.Neg(&num)
+			J[0].ScalarMultiplication(&J[0], &num)
+		}
+	})
 }
 
 func Benchmark(b *testing.B) {
-	const length = 32
+	const length = 1024
 	blobs := make([]goethkzg.Blob, length)
 	commitments := make([]goethkzg.KZGCommitment, length)
 	proofs := make([]goethkzg.KZGProof, length)
@@ -251,6 +283,13 @@ func Benchmark(b *testing.B) {
 		}
 	})
 
+	b.Run("GnarkVerifyKZGProof", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			_ = ctx.GnarkVerifyKZGProof(commitments[0], fields[0], fields[1], proofs[0])
+		}
+	})
+
 	b.Run("VerifyBlobKZGProof", func(b *testing.B) {
 		b.ReportAllocs()
 		for n := 0; n < b.N; n++ {
@@ -265,6 +304,13 @@ func Benchmark(b *testing.B) {
 		}
 	})
 
+	b.Run("GnarkVerifyBlobKZGProof", func(b *testing.B) {
+		b.ReportAllocs()
+		for n := 0; n < b.N; n++ {
+			_ = ctx.GnarkVerifyBlobKZGProof(&blobs[0], commitments[0], proofs[0])
+		}
+	})
+
 	for i := 1; i <= len(blobs); i *= 2 {
 		b.Run(fmt.Sprintf("OriBatch(count=%v)", i), func(b *testing.B) {
 			commitments, openingProofs, _ := ctx.GenTest(blobs[:i], commitments[:i], proofs[:i])
@@ -275,20 +321,20 @@ func Benchmark(b *testing.B) {
 		})
 	}
 	for i := 1; i <= len(blobs); i *= 2 {
+		b.Run(fmt.Sprintf("InvBatch(count=%v)", i), func(b *testing.B) {
+			commitments, openingProofs, _ := ctx.GenTest(blobs[:i], commitments[:i], proofs[:i])
+			b.ReportAllocs()
+			for n := 0; n < b.N; n++ {
+				_ = ctx.InvTest(commitments, openingProofs)
+			}
+		})
+	}
+	for i := 1; i <= len(blobs); i *= 2 {
 		b.Run(fmt.Sprintf("NewBatch(count=%v)", i), func(b *testing.B) {
 			commitments, openingProofs, _ := ctx.GenTest(blobs[:i], commitments[:i], proofs[:i])
 			b.ReportAllocs()
 			for n := 0; n < b.N; n++ {
 				_ = ctx.NewTest(commitments, openingProofs)
-			}
-		})
-	}
-	for i := 1; i <= len(blobs); i *= 2 {
-		b.Run(fmt.Sprintf("TempBatch(count=%v)", i), func(b *testing.B) {
-			commitments, openingProofs, _ := ctx.GenTest(blobs[:i], commitments[:i], proofs[:i])
-			b.ReportAllocs()
-			for n := 0; n < b.N; n++ {
-				_ = ctx.TempTest(commitments, openingProofs)
 			}
 		})
 	}

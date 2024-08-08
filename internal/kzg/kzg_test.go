@@ -29,6 +29,11 @@ func TestProofVerifySmoke(t *testing.T) {
 	if erro != nil {
 		t.Error("proof failed to verify")
 	}
+
+	erroo := GnarkVerify(comm, &proof, &srs.OpeningKey)
+	if erroo != nil {
+		t.Error("proof failed to verify")
+	}
 }
 
 func TestBatchVerifySmoke(t *testing.T) {
@@ -48,10 +53,10 @@ func TestBatchVerifySmoke(t *testing.T) {
 	err := BatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
 	require.NoError(t, err)
 
-	err = TempBatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
+	err = NewBatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
 	require.NoError(t, err)
 
-	err = NewBatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
+	err = InvBatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
 	require.NoError(t, err)
 
 	// Add an invalid proof, to ensure that it fails
