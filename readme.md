@@ -1,3 +1,32 @@
+## Introduction
+This is a fork from github.com/crate-crypto/go-eth-kzg and it provides two batch verification algorithms that are more efficient than that in the original repo, in decending order:
+- [internal -> kzg -> kzg_verify.go -> NewBatchVerifyMultiPoints](https://github.com/sytansy/go-kzg-4844/blob/389d29f6c57d1c384ad9f7dd14489304111c1a56/internal/kzg/kzg_verify.go#L397)
+- [internal -> kzg -> kzg_verify.go -> InvBatchVerifyMultiPoints](https://github.com/sytansy/go-kzg-4844/blob/389d29f6c57d1c384ad9f7dd14489304111c1a56/internal/kzg/kzg_verify.go#L530)
+
+The benchmark is below (in ns) where Unsafe is the naive proof aggregation without the randomized linear combination challenges:
+| Blobs | Original | Inv | New | Unsafe |
+| --- | --- | --- | --- | --- |
+| 1    | 662,288 | 662,580 | 583,273 | 661,873 |
+| 2    | 1,164,088 | 976,287 | 1,146,674 | 912,912 |
+| 4    | 1,079,543 | 1,121,269 | 1,182,132 | 921,742 |
+| 8    | 1,238,596 | 1,053,881 | 1,182,002 | 962,471 |
+| 16   | 1,220,163 | 1,151,709 | 1,229,665 | 1,030,726 |
+| 32   | 1,424,648 | 1,483,559 | 1,378,267 | 1,155,115 |
+| 64   | 1,918,847 | 1,766,635 | 1,475,809 | 1,316,069 |
+| 128  | 2,449,261 | 2,235,119 | 1,712,561 | 1,609,571 |
+| 256  | 3,217,386 | 3,372,530 | 2,299,085 | 2,038,715 |
+| 512  | 5,506,765 | 5,254,228 | 4,074,118 | 3,038,276 |
+| 1024 | 13,220,107 | 12,092,042 | 8,116,553 | 6,301,602 |
+
+It also provides two alternatives for KZG proof verification that are more efficiet than that in the original repo:
+- [internal -> kzg -> kzg_verify.go -> NewVerify](https://github.com/sytansy/go-kzg-4844/blob/389d29f6c57d1c384ad9f7dd14489304111c1a56/internal/kzg/kzg_verify.go#L101)
+- [internal -> kzg -> kzg_verify.go -> GnarkVerify](https://github.com/sytansy/go-kzg-4844/blob/389d29f6c57d1c384ad9f7dd14489304111c1a56/internal/kzg/kzg_verify.go#L137) 
+
+The test cases are updated accordingly as well:
+- [internal -> kzg -> kzg_verify.go -> TestProofVerifySmoke](https://github.com/sytansy/go-kzg-4844/blob/389d29f6c57d1c384ad9f7dd14489304111c1a56/internal/kzg/kzg_test.go#L12)
+- [internal -> kzg -> kzg_verify.go -> TestBatchVerifySmoke](https://github.com/sytansy/go-kzg-4844/blob/389d29f6c57d1c384ad9f7dd14489304111c1a56/internal/kzg/kzg_test.go#L39)
+
+
 ## go-eth-kzg
 
 This library provides the necessary cryptographic functions for EIP-4844. If one
