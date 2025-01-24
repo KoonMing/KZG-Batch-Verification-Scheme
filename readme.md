@@ -4,7 +4,7 @@ This is a fork from github.com/crate-crypto/go-eth-kzg and it provides two batch
 - [internal -> kzg -> kzg_verify.go -> InvBatchVerifyMultiPoints](https://github.com/sytansy/go-kzg-4844/blob/389d29f6c57d1c384ad9f7dd14489304111c1a56/internal/kzg/kzg_verify.go#L530)
 
 The benchmark is below (in ns) where Unsafe is the naive proof aggregation without the randomized linear combination challenges:
-| Blobs | Original | Inv | New | Unsafe |
+| Openings | Original | Inv | New | Unsafe |
 | --- | --- | --- | --- | --- |
 | 1    | 662,288 | 662,580 | 583,273 | 661,873 |
 | 2    | 1,164,088 | 976,287 | 1,146,674 | 912,912 |
