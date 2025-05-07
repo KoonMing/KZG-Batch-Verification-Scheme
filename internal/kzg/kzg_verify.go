@@ -1,6 +1,9 @@
 package kzg
 
 import (
+	"crypto/sha256"
+	"errors"
+	"fmt"
 	"math/big"
 	"math/rand"
 
@@ -8,6 +11,15 @@ import (
 	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
 	"github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
 	"github.com/crate-crypto/go-eth-kzg/internal/utils"
+)
+
+var (
+	//ErrInvalidNumDigests   = errors.New("number of commitments does not match number of proofs")
+	//ErrVerifyOpeningProof  = errors.New("failed to verify opening proof")
+	ErrZeroDivision        = errors.New("division by zero in proof verification")
+	ErrInvalidProof        = errors.New("invalid proof format")
+	ErrInvalidNumProofs = errors.New("number of commitments and proofs do not match")
+	ErrVerifyOpening    = errors.New("failed to verify the batch opening proof")
 )
 
 // OpeningProof is a struct holding a (cryptographic) proof to the claim that a polynomial f(X) (represented by a
@@ -525,6 +537,436 @@ func NewBatchVerifyMultiPoints(commitments []Commitment, proofs []OpeningProof, 
 	}
 
 	return nil
+}
+
+// BatchVerifyEvalSingleUser verifies a batch of KZG proofs for a single user using aggregated witness.
+// Implements the single-user batch verification algorithm from Feist's work.
+//
+// References:
+// - [feist21]: https://eprint.iacr.org/2021/333
+// - [EIP6800]: https://eips.ethereum.org/EIPS/eip-6800
+// Define all error types at package level
+
+
+func BatchVerifyEvalSingleUser1(commitments []bls12381.G1Affine, proofs []OpeningProof, openKey *OpeningKey) error {
+	if len(commitments) != len(proofs) {
+		return ErrInvalidNumDigests
+	}
+	batchSize := len(commitments)
+
+	if batchSize == 0 {
+		return nil
+	}
+	if batchSize == 1 {
+		return Verify(&commitments[0], &proofs[0], openKey)
+	}
+
+	// 1. Generate random r
+	var r fr.Element
+	if _, err := r.SetRandom(); err != nil {
+		return err
+	}
+	rPowers := utils.ComputePowers(r, uint(batchSize))
+
+	// 2. Compute W = ∑ r_i * W_i
+	quotients := make([]bls12381.G1Affine, batchSize)
+	for i := 0; i < batchSize; i++ {
+		if proofs[i].QuotientCommitment.IsInfinity() {
+			return ErrInvalidProof
+		}
+		quotients[i] = proofs[i].QuotientCommitment
+	}
+	var W bls12381.G1Affine
+	if _, err := W.MultiExp(quotients, rPowers, ecc.MultiExpConfig{}); err != nil {
+		return err
+	}
+
+	// 3. Compute t = hash(r, W)
+	var t fr.Element
+    tHash := sha256.Sum256(append(r.Marshal(), W.Marshal()...))
+    t.SetBytes(tHash[:])
+
+    // Compute xWeights = r_i/(t-z_i)
+    xWeights := make([]fr.Element, batchSize)
+    for i := 0; i < batchSize; i++ {
+        denom := new(fr.Element).Sub(&t, &proofs[i].InputPoint)
+        xWeights[i].Div(&rPowers[i], denom)
+		fmt.Printf("Using Div Weight %d: denom=%x, weight=%x\n",i,
+		denom.Marshal(),xWeights[i].Marshal())
+	}
+
+	//=========Use Inverse instead Div========
+	denomInverses1 := make([]fr.Element, batchSize)
+    xWeights1 := make([]fr.Element, batchSize)
+    for i := 0; i < batchSize; i++ {
+        denom := new(fr.Element).Sub(&t, &proofs[i].InputPoint)
+		denomInverses1[i].Inverse(denom) // Compute the modular inverse of (t - z_i)
+		xWeights1[i].Mul(&rPowers[i], &denomInverses1[i]) // Multiply r_i with the precomputed inverse
+		fmt.Printf("Using Inverse Weight %d: denom=%x, weight=%x\n",i,
+		denom.Marshal(),xWeights1[i].Marshal())
+	}
+
+    // Recompute X with new weights
+    var X bls12381.G1Affine
+    if _, err := X.MultiExp(quotients, xWeights, ecc.MultiExpConfig{}); err != nil {
+        return err
+    }
+
+	// 5. Compute the numerator term: ∏ (C_i^{r_i/(t-z_i)}) * G^{∑ (r_i f_i(z_i)/(t-z_i))} * W^{-1} * X^{t}
+    // Compute ∑ [r_i/(t-z_i)]*C_i
+    var sumC bls12381.G1Affine
+    if _, err := sumC.MultiExp(commitments, xWeights, ecc.MultiExpConfig{}); err != nil {
+        return err
+    }
+
+    // 2. Compute G^{∑ [r_i*f_i(z_i)/(t-z_i)]}
+	//denomInverses = make([]fr.Element, batchSize)
+    var sumEvals fr.Element
+    for i := 0; i < batchSize; i++ {
+        denom := new(fr.Element).Sub(&t, &proofs[i].InputPoint)
+        term := new(fr.Element).Mul(&rPowers[i], &proofs[i].ClaimedValue)
+        term.Div(term, denom)
+		// denomInverses[i].Inverse(denom) // Compute the modular inverse of (t - z_i)
+		// term.Mul(term, &denomInverses[i])
+        sumEvals.Add(&sumEvals, term)
+    }
+    var sumEvalsG1 bls12381.G1Affine
+    sumEvalsG1.ScalarMultiplication(&openKey.GenG1, sumEvals.BigInt(new(big.Int)))
+
+    // 3. Compute the numerator: sumC + sumEvalsG1 - W + t*X
+    var numerator bls12381.G1Affine
+    numerator.Add(&sumC, &sumEvalsG1)
+    
+    // Subtract W
+	var Winv bls12381.G1Affine
+    Winv.Neg(&W)
+    numerator.Add(&numerator, &Winv)
+    
+	//========Debug W and W^-1===========
+	fmt.Printf("Aggregated witness W: %x, Inverted W: %x\n", W.Marshal(), Winv.Marshal())	
+	
+
+    // Subtract t*X
+    tX := new(bls12381.G1Affine).ScalarMultiplication(&X, t.BigInt(new(big.Int)))
+    //tX.Neg(tX)
+    numerator.Add(&numerator, tX)
+
+    // 4. Second term is -X
+    var XNeg bls12381.G1Affine
+    XNeg.Neg(&X)
+
+
+    //=========Debug prints==========
+	fmt.Printf("Recomputed X: %x, X^{t}: %x\n", X.Marshal(), tX.Marshal())
+
+	//=====Checking G1 and G2======
+	fmt.Printf("G1 in BatchVerifyEvalSingleUser1 Function: %x\n", openKey.GenG1.Marshal())
+	fmt.Printf("G2 in BatchVerifyEvalSingleUser1 Function: %x\n", openKey.GenG2.Marshal())
+	fmt.Printf("G2Alpha in BatchVerifyEvalSingleUser1 Function: %x\n\n", openKey.AlphaG2.Marshal())
+
+    // 5. Verify pairing equation: e(numerator, H) * e(XNeg, H1) == 1
+    if ok, err := bls12381.PairingCheck(
+        []bls12381.G1Affine{numerator, XNeg},
+        []bls12381.G2Affine{openKey.GenG2, openKey.AlphaG2},
+    ); err != nil {
+        fmt.Printf("Pairing error: %v\n", err)
+        return err
+    } else if !ok {
+        fmt.Println("Pairing equation not satisfied - verification failed")
+        
+        // Additional diagnostic checks
+        fmt.Println("\nDiagnostics:")
+        fmt.Printf("Batch size: %d\n", batchSize)
+        for i := 0; i < batchSize; i++ {
+            fmt.Printf("Proof %d - z_i: %x, f_i(z_i): %x\n", 
+                i, proofs[i].InputPoint.Marshal(), proofs[i].ClaimedValue.Marshal())
+            denom := new(fr.Element).Sub(&t, &proofs[i].InputPoint)
+            fmt.Printf("  t-z_i: %x (zero? %v)\n", denom.Marshal(), denom.IsZero())
+        }
+        
+        return ErrVerifyOpeningProof
+    }
+
+    fmt.Println("Verification successful!")
+    return nil
+}
+
+func BatchVerifyEvalSingleUser(commitments []bls12381.G1Affine, proofs []OpeningProof, openKey *OpeningKey) error {
+    if len(commitments) != len(proofs) {
+        return ErrInvalidNumDigests
+    }
+    batchSize := len(commitments)
+
+    if batchSize == 0 {
+        return nil
+    }
+    if batchSize == 1 {
+        return Verify(&commitments[0], &proofs[0], openKey)
+    }
+
+    // 1. Generate random r and compute powers r_i = r^i
+    var r fr.Element
+    if _, err := r.SetRandom(); err != nil {
+        return err
+    }
+    rPowers := utils.ComputePowers(r, uint(batchSize))
+
+    // 2. Compute W = ∑ r_i * W_i
+    quotients := make([]bls12381.G1Affine, batchSize)
+    for i := 0; i < batchSize; i++ {
+        quotients[i] = proofs[i].QuotientCommitment
+    }
+    var W bls12381.G1Affine
+    if _, err := W.MultiExp(quotients, rPowers, ecc.MultiExpConfig{}); err != nil {
+        return err
+    }
+
+    // 3. Compute t = hash(r, W)
+    tHash := sha256.Sum256(append(r.Marshal(), W.Marshal()...))
+    var t fr.Element
+    t.SetBytes(tHash[:])
+
+    // 4. Compute xWeights = r_i/(t-z_i)
+    xWeights := make([]fr.Element, batchSize)
+    for i := 0; i < batchSize; i++ {
+        denom := new(fr.Element).Sub(&t, &proofs[i].InputPoint)
+        if denom.IsZero() {
+            return fmt.Errorf("zero denominator at proof %d", i)
+        }
+        xWeights[i].Div(&rPowers[i], denom)
+    }
+
+    // 5. Compute X = ∑ [r_i/(t-z_i)] * W_i
+    var X bls12381.G1Affine
+    if _, err := X.MultiExp(quotients, xWeights, ecc.MultiExpConfig{}); err != nil {
+        return err
+    }
+
+    // 6. Compute numerator components
+    var sumC bls12381.G1Affine
+    if _, err := sumC.MultiExp(commitments, xWeights, ecc.MultiExpConfig{}); err != nil {
+        return err
+    }
+
+    // G^{∑ [r_i*f_i(z_i)/(t-z_i)]}
+    var sumEvals fr.Element
+    for i := 0; i < batchSize; i++ {
+        term := new(fr.Element).Mul(&rPowers[i], &proofs[i].ClaimedValue)
+        denom := new(fr.Element).Sub(&t, &proofs[i].InputPoint)
+        term.Div(term, denom)
+        sumEvals.Add(&sumEvals, term)
+    }
+    var sumEvalsG1 bls12381.G1Affine
+    sumEvalsG1.ScalarMultiplication(&openKey.GenG1, sumEvals.BigInt(new(big.Int)))
+
+    // W^{-1}
+    var WInv bls12381.G1Affine
+    WInv.Neg(&W)
+
+    // X^{t}
+    var XtInv bls12381.G1Affine
+    {
+        //tNeg := new(fr.Element).Neg(&t)
+        XtInv.ScalarMultiplication(&X, t.BigInt(new(big.Int)))
+    }
+
+    //Combine all numerator terms 
+    var numerator bls12381.G1Affine
+    numerator.Add(&sumC, &sumEvalsG1)
+    numerator.Add(&numerator, &WInv)
+    numerator.Add(&numerator, &XtInv)
+
+    //Second term is X^{-1}
+    var XInv bls12381.G1Affine
+    XInv.Neg(&X)
+
+    // 4. Verify pairing equation
+    if ok, err := bls12381.PairingCheck(
+        []bls12381.G1Affine{numerator, XInv},
+        []bls12381.G2Affine{openKey.GenG2, openKey.AlphaG2},
+    ); err != nil {
+        return err
+    } else if !ok {
+
+		fmt.Println("Intermediate values:")
+		fmt.Printf("t: %x\n", t.Marshal())
+		for i := 0; i < batchSize; i++ {
+			fmt.Printf("Proof %d:\n", i)
+			fmt.Printf("  z_i: %x\n", proofs[i].InputPoint.Marshal())
+			fmt.Printf("  weight: %x\n", xWeights[i].Marshal())
+			fmt.Printf("  r_i: %x\n", rPowers[i].Marshal())
+			fmt.Printf("  t-z_i: %x\n", new(fr.Element).Sub(&t, &proofs[i].InputPoint).Marshal())
+		}
+        // Enhanced diagnostics with correct pairing computation
+        fmt.Println("Pairing equation breakdown:")
+        
+        // Compute pairing results separately
+        var (
+            pair1 bls12381.GT
+            pair2 bls12381.GT
+            final bls12381.GT
+        )
+        
+        // First pairing: e(numerator, GenG2)
+        pair1,_ = bls12381.Pair([]bls12381.G1Affine{numerator}, []bls12381.G2Affine{openKey.GenG2})
+        fmt.Printf("e(numerator, GenG2): %x\n", pair1.Marshal())
+        
+        // Second pairing: e(XInv, AlphaG2)
+        pair2,_ = bls12381.Pair([]bls12381.G1Affine{XInv}, []bls12381.G2Affine{openKey.AlphaG2})
+        fmt.Printf("e(XInv, AlphaG2): %x\n", pair2.Marshal())
+        
+        // Multiply the pairings
+        final.Mul(&pair1, &pair2)
+		one := getGTOne()
+        fmt.Printf("Final pairing product: %x\n", final.Marshal())
+        fmt.Printf("Expected identity: %x\n", one.Marshal())
+
+		// Check if product == 1 by comparing marshaled outputs
+		if final != one {
+			fmt.Println("Pairing product does not equal identity")
+		}
+        
+        return ErrVerifyOpeningProof
+    }
+
+    return nil
+}
+
+func BatchVerifyEvalSingleUser2(commitments []bls12381.G1Affine, proofs []OpeningProof, openKey *OpeningKey) error {
+    if len(commitments) != len(proofs) {
+        return ErrInvalidNumProofs
+    }
+    batchSize := len(commitments)
+
+    if batchSize == 0 {
+        return nil
+    }
+    if batchSize == 1 {
+        return Verify(&commitments[0], &proofs[0], openKey)
+    }
+
+    // 1. Generate random r and compute powers r_i = r^i
+    var r fr.Element
+    if _, err := r.SetRandom(); err != nil {
+        return err
+    }
+    rPowers := utils.ComputePowers(r, uint(batchSize))
+
+    // 2. Compute W = ∑ r_i * W_i
+    witnesses := make([]bls12381.G1Affine, batchSize)
+    for i := 0; i < batchSize; i++ {
+        witnesses[i] = proofs[i].QuotientCommitment
+    }
+    var W bls12381.G1Affine
+    if _, err := W.MultiExp(witnesses, rPowers, ecc.MultiExpConfig{}); err != nil {
+        return err
+    }
+
+    // 3. Compute t = hash(r, W)
+    tHash := sha256.Sum256(append(r.Marshal(), W.Marshal()...))
+    var t fr.Element
+    t.SetBytes(tHash[:])
+
+    // 4. Compute X weights: r_i/(t-z_i)
+    xWeights := make([]fr.Element, batchSize)
+    for i := 0; i < batchSize; i++ {
+        denom := new(fr.Element).Sub(&t, &proofs[i].InputPoint)
+        if denom.IsZero() {
+            return fmt.Errorf("t equals z_i for proof %d", i)
+        }
+        xWeights[i].Div(&rPowers[i], denom)
+    }
+
+    // 5. Compute X = ∑ [r_i/(t-z_i)] * W_i
+    var X bls12381.G1Affine
+    if _, err := X.MultiExp(witnesses, xWeights, ecc.MultiExpConfig{}); err != nil {
+        return err
+    }
+
+    // 6. Use fold for commitments and evaluations
+    foldedCommitments, foldedEvaluations, err := fold(commitments, getClaimedValues(proofs), xWeights)
+    if err != nil {
+        return err
+    }
+
+    // 7. Compute G^{foldedEvaluations}
+    var foldedEvalsG1 bls12381.G1Affine
+    foldedEvalsG1.ScalarMultiplication(&openKey.GenG1, foldedEvaluations.BigInt(new(big.Int)))
+
+    // 8. Compute numerator components
+    // numerator = foldedCommitments + foldedEvalsG1 - W - X^t
+    var numerator bls12381.G1Affine
+    numerator.Add(&foldedCommitments, &foldedEvalsG1)
+    
+    W.Neg(&W)
+    numerator.Add(&numerator, &W)
+    
+    Xt := new(bls12381.G1Affine).ScalarMultiplication(&X, t.BigInt(new(big.Int)))
+    //Xt.Neg(Xt)
+    numerator.Add(&numerator, Xt)
+
+    // 9. Second pairing term: X^{-1}
+    var XInv bls12381.G1Affine
+    XInv.Neg(&X)
+
+    // 10. Verify pairing equation
+    if ok, err := bls12381.PairingCheck(
+        []bls12381.G1Affine{numerator, XInv},
+        []bls12381.G2Affine{openKey.GenG2, openKey.AlphaG2},
+    ); err != nil {
+        return err
+    } else if !ok {
+        return ErrVerifyOpening
+    }
+
+    return nil
+}
+
+// Helper to extract claimed values from proofs
+func getClaimedValues(proofs []OpeningProof) []fr.Element {
+    values := make([]fr.Element, len(proofs))
+    for i := range proofs {
+        values[i] = proofs[i].ClaimedValue
+    }
+    return values
+}
+
+
+// getGTOne returns the identity element in GT
+func getGTOne() bls12381.GT {
+	var one bls12381.GT
+	one.SetOne()
+	return one
+}
+
+func HashFr(inputs ...interface{}) (fr.Element, error) {
+	hasher := sha256.New()
+	for _, input := range inputs {
+		switch v := input.(type) {
+		case fr.Element:
+			// Convert fr.Element to bytes and add to hash
+			var inputBytes [32]byte
+			var bigIntValue big.Int
+			v.BigInt(&bigIntValue) // Pass a pointer to a big.Int
+			bigIntValue.FillBytes(inputBytes[:])
+			hasher.Write(inputBytes[:])
+
+		case bls12381.G1Affine:
+			// Serialize G1Affine and add to hash
+			hasher.Write(v.Marshal())
+
+		default:
+			// If the input type is unsupported, return an error
+			return fr.Element{}, errors.New("unsupported input type for HashFr")
+		}
+	}
+
+	// Compute the hash and convert it to fr.Element
+	hashBytes := hasher.Sum(nil)
+	var result fr.Element
+	result.SetBytes(hashBytes)
+
+	return result, nil
 }
 
 func InvBatchVerifyMultiPoints(commitments []Commitment, proofs []OpeningProof, openKey *OpeningKey) error {

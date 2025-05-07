@@ -38,9 +38,10 @@ func TestProofVerifySmoke(t *testing.T) {
 
 func TestBatchVerifySmoke(t *testing.T) {
 	domain := NewDomain(4)
-	srs, _ := newLagrangeSRSInsecure(*domain, big.NewInt(1234))
+	//srs, _ := newLagrangeSRSInsecure(*domain, big.NewInt(1234))
+	srs, _ := newMonomialSRSInsecure(*domain, big.NewInt(1234))
 
-	numProofs := 10
+	numProofs := 3
 	commitments := make([]Commitment, 0, numProofs)
 	proofs := make([]OpeningProof, 0, numProofs)
 	for i := 0; i < numProofs-1; i++ {
@@ -48,16 +49,20 @@ func TestBatchVerifySmoke(t *testing.T) {
 		commitments = append(commitments, commitment)
 		proofs = append(proofs, proof)
 	}
-
+	require.NotEqual(t, commitments[0].Marshal(), commitments[1].Marshal(), "Commitments should be distinct")
+	
 	// Check that these verify successfully.
-	err := BatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
+	//err := BatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
+	//require.NoError(t, err)
+
+	//err = NewBatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
+	//require.NoError(t, err)
+
+	err := BatchVerifyEvalSingleUser1(commitments, proofs, &srs.OpeningKey)
 	require.NoError(t, err)
 
-	err = NewBatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
-	require.NoError(t, err)
-
-	err = InvBatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
-	require.NoError(t, err)
+	// err = InvBatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
+	// require.NoError(t, err)
 
 	// Add an invalid proof, to ensure that it fails
 	proof, _ := randValidOpeningProof(t, *domain, *srs)

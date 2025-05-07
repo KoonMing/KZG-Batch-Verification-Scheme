@@ -5,6 +5,7 @@
 package kzg
 
 import (
+	"fmt"
 	"math/big"
 
 	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
@@ -82,6 +83,11 @@ func newMonomialSRSInsecureUint64(size uint64, bAlpha *big.Int) (*SRS, error) {
 	}
 	g1s := bls12381.BatchScalarMultiplicationG1(&gen1Aff, alphas)
 	copy(commitKey.G1[1:], g1s)
+
+	//=====Checking G1 and G2======
+	fmt.Printf("G1 in SRS Function: %x\n", openKey.GenG1.Marshal())
+	fmt.Printf("G2 in SRS Function: %x\n", openKey.GenG2.Marshal())
+	fmt.Printf("G2Alpha in SRS Function: %x\n\n", openKey.AlphaG2.Marshal())
 
 	return &SRS{
 		CommitKey:  commitKey,
