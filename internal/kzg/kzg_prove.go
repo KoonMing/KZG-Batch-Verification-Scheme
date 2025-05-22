@@ -1,8 +1,254 @@
 package kzg
 
 import (
+	"crypto/sha256"
+
+	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
 	"github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
+	"github.com/crate-crypto/go-eth-kzg/internal/utils"
 )
+
+func OriBatchOpen(commitments []bls12381.G1Affine, p []Polynomial, z []fr.Element, ck *CommitKey, numGoRoutines int) (BatchOpeningProof, error) {
+	if len(p) == 0 || len(p) > len(ck.G1) {
+		return BatchOpeningProof{}, ErrInvalidPolynomialSize
+	}
+
+	//y[i] = f_i(z_i)
+	y := make([]fr.Element, len(z))
+
+	for i := range p {
+		y[i] = eval(p[i], z[i])
+	}
+
+	// ∑_{i=1}^k q_i(x)
+	q := make([]fr.Element, len(z))
+
+	// q_i(x)
+	q_ := make([][]fr.Element, len(z))
+	for i := range q_ {
+		q_[i] = make([]fr.Element, len(p[i]))
+	}
+
+	// q_i(x) = (f_i(x) - f_i(z_i)) / (x - z_i)
+	for i := range p {
+		q_[i] = dividePolyByXminusA(p[i], y[i], z[i])
+
+		//assume same degree
+		for j := range q_[i] {
+			q[j].Add(&q[j], &q_[i][j])
+		}
+	}
+
+	//r=H({C_i},{z_i},{f_i(z_i)})
+	var buf []byte
+
+	for _, C_i := range commitments {
+		buf = append(buf, C_i.Marshal()...)
+	}
+
+	for _, z_i := range z {
+		buf = append(buf, z_i.Marshal()...)
+	}
+
+	for _, y_i := range y {
+		buf = append(buf, y_i.Marshal()...)
+	}
+
+	h := sha256.New()
+	h.Write(buf)
+
+	digest := h.Sum(nil)
+	var r fr.Element
+	r.SetBytes(digest[:])
+
+	// Compute r_i
+	rPowers := utils.ComputePowers(r, uint(len(commitments)))
+
+	// assuming all polys same degree, pad if needed
+	riqi := make([]fr.Element, len(p[0])) 
+
+	for i := range q_ {
+		for j := range q_[i] {
+			tmp := new(fr.Element).Mul(&q_[i][j], &rPowers[i])
+			riqi[j].Add(&riqi[j], tmp)
+		}
+	}
+
+	//W = G^{∑_{i=1}^k r_i*q_i(x)}
+	W, err := Commit(riqi, ck, numGoRoutines)
+	if err != nil {
+		return BatchOpeningProof{}, err
+	}
+
+	//t=H(r,W)
+	h1 := sha256.New()
+	h1.Write(r.Marshal()[:])
+	h1.Write(W.Marshal()[:])
+
+	digest1 := h1.Sum(nil)
+	var t fr.Element
+	t.SetBytes(digest1[:])
+
+	q = make([]fr.Element, len(q_))
+
+	// ∑_{i=1}^k r_i*q_i(x)/(t-z_i)
+	for i := range q_ {
+		var temp fr.Element
+		temp.Sub(&t, &z[i])
+		temp.Inverse(&temp)
+
+		for j := range q_[i] {
+			//temp.Mul(&q_[i][j], &temp)
+			// q[j].Add(&q[j], new(fr.Element).Mul(&q_[i][j], &temp2))
+			temp2 := new(fr.Element).Mul(&q_[i][j], &rPowers[i])
+			temp2.Mul(temp2, &temp)                            
+			q[j].Add(&q[j], temp2) 
+			
+		}
+	}
+
+	//X = G^{∑_{i=1}^k r_i*q_i(x)/(t-z_i)}
+	X, err := Commit(q, ck, numGoRoutines)
+	if err != nil {
+		return BatchOpeningProof{}, err
+	}
+
+	res := BatchOpeningProof{
+		InputPoint:   z,
+		ClaimedValue: y,
+	}
+
+	res.QuotientCommitmentW.Set(W)
+	res.QuotientCommitmentX.Set(X)
+
+	return res, nil
+}
+
+func BatchOpen(commitments []bls12381.G1Affine, p []Polynomial, z []fr.Element, ck *CommitKey, numGoRoutines int) (BatchOpeningProof, error) {
+	if len(p) == 0 || len(p) > len(ck.G1) {
+		return BatchOpeningProof{}, ErrInvalidPolynomialSize
+	}
+
+	//y[i] = f_i(z_i)
+	y := make([]fr.Element, len(z))
+
+	for i := range p {
+		y[i] = eval(p[i], z[i])
+	}
+
+	// ∑_{i=1}^k q_i(x)
+	q := make([]fr.Element, len(z))
+
+	// q_i(x)
+	q_ := make([][]fr.Element, len(z))
+	for i := range q_ {
+		q_[i] = make([]fr.Element, len(p[i]))
+	}
+
+	// q_i(x) = (f_i(x) - f_i(z_i)) / (x - z_i)
+	for i := range p {
+		q_[i] = dividePolyByXminusA(p[i], y[i], z[i])
+
+		//assume same degree
+		for j := range q_[i] {
+			q[j].Add(&q[j], &q_[i][j])
+		}
+	}
+
+	//W = G^{∑_{i=1}^k q_i(x)}
+	W, err := Commit(q, ck, numGoRoutines)
+	if err != nil {
+		return BatchOpeningProof{}, err
+	}
+
+	//t=H({C_i},{z_i},{f_i(z_i)},W)
+	var buf []byte
+
+	for _, C_i := range commitments {
+		buf = append(buf, C_i.Marshal()...)
+	}
+
+	for _, z_i := range z {
+		buf = append(buf, z_i.Marshal()...)
+	}
+
+	for _, y_i := range y {
+		buf = append(buf, y_i.Marshal()...)
+	}
+
+	h := sha256.New()
+	h.Write(buf)
+	h.Write(W.Marshal()[:])
+
+	digest := h.Sum(nil)
+	var t fr.Element
+	t.SetBytes(digest[:])
+
+	q = make([]fr.Element, len(q_))
+
+	// ∑_{i=1}^k q_i(x)/(t-z_i)
+	for i := range q_ {
+		var temp fr.Element
+		temp.Sub(&t, &z[i])
+		temp.Inverse(&temp)
+
+		for j := range q_[i] {
+			//temp.Mul(&q_[i][j], &temp)
+			q[j].Add(&q[j], new(fr.Element).Mul(&q_[i][j], &temp))
+		}
+	}
+
+	//X = G^{∑_{i=1}^k q_i(x)/(t-z_i)}
+	X, err := Commit(q, ck, numGoRoutines)
+	if err != nil {
+		return BatchOpeningProof{}, err
+	}
+
+	res := BatchOpeningProof{
+		InputPoint:   z,
+		ClaimedValue: y,
+	}
+
+	res.QuotientCommitmentW.Set(W)
+	res.QuotientCommitmentX.Set(X)
+
+	return res, nil
+}
+
+// eval returns p(point) where p is interpreted as a polynomial
+// ∑_{i<len(p)}p[i]Xⁱ
+// https://github.com/Consensys/gnark-crypto/blob/56600883e0e9f9b159e9c7000b94e76185ec3d0d/ecc/bls12-381/kzg/kzg.go#L55
+func eval(p []fr.Element, point fr.Element) fr.Element {
+	var res fr.Element
+	n := len(p)
+	res.Set(&p[n-1])
+	for i := n - 2; i >= 0; i-- {
+		res.Mul(&res, &point).Add(&res, &p[i])
+	}
+	return res
+}
+
+// dividePolyByXminusA computes (f-f(a))/(x-a), in canonical basis, in regular form
+// edited from:
+// https://github.com/Consensys/gnark-crypto/blob/56600883e0e9f9b159e9c7000b94e76185ec3d0d/ecc/bls12-381/kzg/kzg.go#L566
+func dividePolyByXminusA(f []fr.Element, fa, a fr.Element) []fr.Element {
+	q := make([]fr.Element, len(f))
+	copy(q, f)
+
+	// first we compute f-f(a)
+	q[0].Sub(&q[0], &fa)
+
+	// now we use synthetic division to divide by x-a
+	var t fr.Element
+	for i := len(q) - 2; i >= 0; i-- {
+		t.Mul(&q[i+1], &a)
+
+		q[i].Add(&q[i], &t)
+	}
+
+	// the result is of degree deg(f)-1
+	return q[1:]
+}
 
 // Open verifies that a polynomial f(x) when evaluated at a point `z` is equal to `f(z)`
 //

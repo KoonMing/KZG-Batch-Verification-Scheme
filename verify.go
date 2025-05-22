@@ -2,9 +2,26 @@ package goethkzg
 
 import (
 	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
+	"github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
 	"github.com/crate-crypto/go-eth-kzg/internal/kzg"
 	"golang.org/x/sync/errgroup"
 )
+
+// BatchOpeningProof is a struct holding a (cryptographic) proof to the claim that multi polynomial f_i(X) (represented by multi
+// commitment to them) evaluates at multi points `z_i` to `f_i(z_i)`.
+type BatchOpeningProof struct {
+	// Commitment to quotient polynomial \sum_{i=1}^k (f_i(X) - f_i(z_i))/(X-z_i)
+	QuotientCommitmentW bls12381.G1Affine
+
+	// Commitment to quotient polynomial \sum_{i=1}^k (f_i(X) - f_i(z_i))/(t-z_i)(X-z_i)
+	QuotientCommitmentX bls12381.G1Affine
+
+	// Point that we are evaluating the polynomial at : `z_i`
+	InputPoint []fr.Element
+
+	// ClaimedValue purported value : `f(z)`
+	ClaimedValue []fr.Element
+}
 
 // VerifyKZGProof implements [verify_kzg_proof].
 //
@@ -339,6 +356,45 @@ func (c *Context) GenTest(blobs []Blob, polynomialCommitments []KZGCommitment, k
 
 	return commitments, openingProofs, nil
 }
+
+func (c *Context) GenBatchTest(blobs []Blob, polynomialCommitments []KZGCommitment, numGoRoutines int) ([]bls12381.G1Affine, kzg.BatchOpeningProof, error) {
+	blobsLen := len(blobs)
+	batchSize := blobsLen
+
+	polynomials := make([]kzg.Polynomial, batchSize)
+	z := make([]fr.Element, batchSize)
+	commitments := make([]bls12381.G1Affine, batchSize)
+
+	for i := 0; i < batchSize; i++ {
+		// 2a. Deserialize
+		//
+		serComm := polynomialCommitments[i]
+		polynomialCommitment, err := DeserializeKZGCommitment(serComm)
+		if err != nil {
+			return nil, kzg.BatchOpeningProof{}, err
+		}
+
+		blob := &blobs[i]
+		polynomial, err := DeserializeBlob(blob)
+		if err != nil {
+			return nil, kzg.BatchOpeningProof{}, err
+		}
+		polynomials[i] = polynomial
+
+		// 2b. Compute the evaluation challenge
+		evaluationChallenge := computeChallenge(blob, serComm)
+		z[i] = evaluationChallenge
+
+		commitments[i] = polynomialCommitment
+	}
+
+	proof, err := kzg.OriBatchOpen(commitments, polynomials, z, c.commitKeyMonomial, numGoRoutines)
+	if err != nil {
+		return nil, kzg.BatchOpeningProof{}, err
+	}
+	return commitments, proof, nil
+}
+
 func (c *Context) OriTest(commitments []bls12381.G1Affine, openingProofs []kzg.OpeningProof) error {
 	return kzg.BatchVerifyMultiPoints(commitments, openingProofs, c.openKey)
 }
@@ -349,6 +405,17 @@ func (c *Context) InvTest(commitments []bls12381.G1Affine, openingProofs []kzg.O
 
 func (c *Context) NewTest(commitments []bls12381.G1Affine, openingProofs []kzg.OpeningProof) error {
 	return kzg.NewBatchVerifyMultiPoints(commitments, openingProofs, c.openKey)
+}
+
+func (c *Context) OriSingleTest(commitments []bls12381.G1Affine, openingProofs BatchOpeningProof) error {
+	// Convert local BatchOpeningProof to kzg.BatchOpeningProof
+	kzgOpeningProofs := kzg.BatchOpeningProof{
+		QuotientCommitmentW: openingProofs.QuotientCommitmentW,
+		QuotientCommitmentX: openingProofs.QuotientCommitmentX,
+		InputPoint:          openingProofs.InputPoint,
+		ClaimedValue:        openingProofs.ClaimedValue,
+	}
+	return kzg.OriBatchVerify(commitments, kzgOpeningProofs, c.openKey)
 }
 
 // VerifyBlobKZGProofBatchPar implements [verify_blob_kzg_proof_batch]. This is the parallelized version of

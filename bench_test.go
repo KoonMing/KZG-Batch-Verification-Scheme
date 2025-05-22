@@ -356,6 +356,17 @@ func Benchmark(b *testing.B) {
 			}
 		})
 	}
+
+	for i := 1; i <= len(blobs); i *= 2 {
+		b.Run(fmt.Sprintf("OriBatchVerify(count=%d)", i), func(b *testing.B) {
+			
+			commitments, Proofs, _ := ctx.GenBatchTest(blobs[:i], commitments[:i], NumGoRoutines)
+			b.ReportAllocs()
+			for n := 0; n < b.N; n++ {
+				_ = ctx.OriSingleTest(commitments, goethkzg.BatchOpeningProof(Proofs))
+			}
+		})
+	}
 }
 
 func BenchmarkDeserializeBlob(b *testing.B) {

@@ -36,10 +36,46 @@ func TestProofVerifySmoke(t *testing.T) {
 	}
 }
 
-func TestBatchVerifySmoke(t *testing.T) {
+func TestBatchVerify(t *testing.T) {
 	domain := NewDomain(4)
 	//srs, _ := newLagrangeSRSInsecure(*domain, big.NewInt(1234))
-	srs, _ := newMonomialSRSInsecure(*domain, big.NewInt(1234))
+	srs, _ := newMonomialSRSInsecureUint64(4, big.NewInt(1234))
+
+	numProofs := 4
+	commitments := make([]Commitment, 0, numProofs)
+	z := make([]fr.Element, numProofs)
+	for i := range z {
+		z[i].SetRandom()
+	}
+
+	var proofs BatchOpeningProof
+	poly := make([]Polynomial, 0, numProofs)
+	for i := 0; i < numProofs; i++ {
+		poly = append(poly, randPoly(t, *domain))
+		comm, _ := Commit(poly[i], &srs.CommitKey, 0)
+		commitments = append(commitments, *comm)
+	}
+	require.NotEqual(t, commitments[0].Marshal(), commitments[1].Marshal(), "Commitments should be distinct")
+
+	proofs, _ = OriBatchOpen(commitments, poly, z, &srs.CommitKey, 0)
+	err := OriBatchVerify(commitments, proofs, &srs.OpeningKey)
+	require.NoError(t, err)
+
+	proofs, _ = BatchOpen(commitments, poly, z, &srs.CommitKey, 0)
+	err = BatchVerify(commitments, proofs, &srs.OpeningKey)
+	require.NoError(t, err)
+
+	// Add an invalid proof, to ensure that it fails
+	poly[0] = randPoly(t, *domain)
+	proofs, _ = BatchOpen(commitments, poly, z, &srs.CommitKey, 0)
+	err = BatchVerify(commitments, proofs, &srs.OpeningKey)
+	require.Error(t, err, "An invalid commitment was added to the list, however verification returned true")
+}
+
+func TestBatchVerifySmoke(t *testing.T) {
+	domain := NewDomain(4)
+	srs, _ := newLagrangeSRSInsecure(*domain, big.NewInt(1234))
+	//srs, _ := newMonomialSRSInsecure(*domain, big.NewInt(1234))
 
 	numProofs := 3
 	commitments := make([]Commitment, 0, numProofs)
@@ -52,17 +88,14 @@ func TestBatchVerifySmoke(t *testing.T) {
 	require.NotEqual(t, commitments[0].Marshal(), commitments[1].Marshal(), "Commitments should be distinct")
 	
 	// Check that these verify successfully.
-	//err := BatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
-	//require.NoError(t, err)
-
-	//err = NewBatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
-	//require.NoError(t, err)
-
-	err := BatchVerifyEvalSingleUser1(commitments, proofs, &srs.OpeningKey)
+	err := BatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
 	require.NoError(t, err)
 
-	// err = InvBatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
-	// require.NoError(t, err)
+	err = NewBatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
+	require.NoError(t, err)
+
+	err = InvBatchVerifyMultiPoints(commitments, proofs, &srs.OpeningKey)
+	require.NoError(t, err)
 
 	// Add an invalid proof, to ensure that it fails
 	proof, _ := randValidOpeningProof(t, *domain, *srs)
@@ -190,6 +223,7 @@ func randPoly(t *testing.T, domain Domain) Polynomial {
 	}
 	return poly
 }
+
 
 func randomScalarNotInDomain(t *testing.T, domain Domain) fr.Element {
 	t.Helper()
