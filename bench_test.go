@@ -228,6 +228,7 @@ func Benchmark(b *testing.B) {
 	const length = 1024
 	blobs := make([]goethkzg.Blob, length)
 	commitments := make([]goethkzg.KZGCommitment, length)
+	commitmentsMono := make([]goethkzg.KZGCommitment, length)
 	proofs := make([]goethkzg.KZGProof, length)
 	fields := make([]goethkzg.Scalar, length)
 
@@ -235,11 +236,14 @@ func Benchmark(b *testing.B) {
 		blob := GetRandBlob(int64(i))
 		commitment, err := ctx.BlobToKZGCommitment(blob, NumGoRoutines)
 		require.NoError(b, err)
+		commitmentMono, err := ctx.BlobToKZGCommitmentMonomial(blob, NumGoRoutines)
+		require.NoError(b, err)
 		proof, err := ctx.ComputeBlobKZGProof(blob, commitment, NumGoRoutines)
 		require.NoError(b, err)
 
 		blobs[i] = *blob
 		commitments[i] = commitment
+		commitmentsMono[i] = commitmentMono
 		proofs[i] = proof
 		fields[i] = GetRandFieldElement(int64(i))
 	}
@@ -248,119 +252,119 @@ func Benchmark(b *testing.B) {
 	// Public functions
 	///////////////////////////////////////////////////////////////////////////
 
-	b.Run("BlobToKZGCommitment", func(b *testing.B) {
-		b.ReportAllocs()
-		for n := 0; n < b.N; n++ {
-			_, _ = ctx.BlobToKZGCommitment(&blobs[0], NumGoRoutines)
-		}
-	})
+	// b.Run("BlobToKZGCommitment", func(b *testing.B) {
+	// 	b.ReportAllocs()
+	// 	for n := 0; n < b.N; n++ {
+	// 		_, _ = ctx.BlobToKZGCommitment(&blobs[0], NumGoRoutines)
+	// 	}
+	// })
 
-	b.Run("ComputeKZGProof", func(b *testing.B) {
-		b.ReportAllocs()
-		for n := 0; n < b.N; n++ {
-			_, _, _ = ctx.ComputeKZGProof(&blobs[0], fields[0], NumGoRoutines)
-		}
-	})
+	// b.Run("ComputeKZGProof", func(b *testing.B) {
+	// 	b.ReportAllocs()
+	// 	for n := 0; n < b.N; n++ {
+	// 		_, _, _ = ctx.ComputeKZGProof(&blobs[0], fields[0], NumGoRoutines)
+	// 	}
+	// })
 
-	b.Run("ComputeBlobKZGProof", func(b *testing.B) {
-		b.ReportAllocs()
-		for n := 0; n < b.N; n++ {
-			_, _ = ctx.ComputeBlobKZGProof(&blobs[0], commitments[0], NumGoRoutines)
-		}
-	})
+	// b.Run("ComputeBlobKZGProof", func(b *testing.B) {
+	// 	b.ReportAllocs()
+	// 	for n := 0; n < b.N; n++ {
+	// 		_, _ = ctx.ComputeBlobKZGProof(&blobs[0], commitments[0], NumGoRoutines)
+	// 	}
+	// })
 
-	b.Run("VerifyKZGProof", func(b *testing.B) {
-		b.ReportAllocs()
-		for n := 0; n < b.N; n++ {
-			_ = ctx.VerifyKZGProof(commitments[0], fields[0], fields[1], proofs[0])
-		}
-	})
+	// b.Run("VerifyKZGProof", func(b *testing.B) {
+	// 	b.ReportAllocs()
+	// 	for n := 0; n < b.N; n++ {
+	// 		_ = ctx.VerifyKZGProof(commitments[0], fields[0], fields[1], proofs[0])
+	// 	}
+	// })
 
-	b.Run("NewVerifyKZGProof", func(b *testing.B) {
-		b.ReportAllocs()
-		for n := 0; n < b.N; n++ {
-			_ = ctx.NewVerifyKZGProof(commitments[0], fields[0], fields[1], proofs[0])
-		}
-	})
+	// b.Run("NewVerifyKZGProof", func(b *testing.B) {
+	// 	b.ReportAllocs()
+	// 	for n := 0; n < b.N; n++ {
+	// 		_ = ctx.NewVerifyKZGProof(commitments[0], fields[0], fields[1], proofs[0])
+	// 	}
+	// })
 
-	b.Run("GnarkVerifyKZGProof", func(b *testing.B) {
-		b.ReportAllocs()
-		for n := 0; n < b.N; n++ {
-			_ = ctx.GnarkVerifyKZGProof(commitments[0], fields[0], fields[1], proofs[0])
-		}
-	})
+	// b.Run("GnarkVerifyKZGProof", func(b *testing.B) {
+	// 	b.ReportAllocs()
+	// 	for n := 0; n < b.N; n++ {
+	// 		_ = ctx.GnarkVerifyKZGProof(commitments[0], fields[0], fields[1], proofs[0])
+	// 	}
+	// })
 
-	b.Run("VerifyBlobKZGProof", func(b *testing.B) {
-		b.ReportAllocs()
-		for n := 0; n < b.N; n++ {
-			_ = ctx.VerifyBlobKZGProof(&blobs[0], commitments[0], proofs[0])
-		}
-	})
+	// b.Run("VerifyBlobKZGProof", func(b *testing.B) {
+	// 	b.ReportAllocs()
+	// 	for n := 0; n < b.N; n++ {
+	// 		_ = ctx.VerifyBlobKZGProof(&blobs[0], commitments[0], proofs[0])
+	// 	}
+	// })
 
-	b.Run("NewVerifyBlobKZGProof", func(b *testing.B) {
-		b.ReportAllocs()
-		for n := 0; n < b.N; n++ {
-			_ = ctx.NewVerifyBlobKZGProof(&blobs[0], commitments[0], proofs[0])
-		}
-	})
+	// b.Run("NewVerifyBlobKZGProof", func(b *testing.B) {
+	// 	b.ReportAllocs()
+	// 	for n := 0; n < b.N; n++ {
+	// 		_ = ctx.NewVerifyBlobKZGProof(&blobs[0], commitments[0], proofs[0])
+	// 	}
+	// })
 
-	b.Run("GnarkVerifyBlobKZGProof", func(b *testing.B) {
-		b.ReportAllocs()
-		for n := 0; n < b.N; n++ {
-			_ = ctx.GnarkVerifyBlobKZGProof(&blobs[0], commitments[0], proofs[0])
-		}
-	})
+	// b.Run("GnarkVerifyBlobKZGProof", func(b *testing.B) {
+	// 	b.ReportAllocs()
+	// 	for n := 0; n < b.N; n++ {
+	// 		_ = ctx.GnarkVerifyBlobKZGProof(&blobs[0], commitments[0], proofs[0])
+	// 	}
+	// })
 
-	for i := 1; i <= len(blobs); i *= 2 {
-		b.Run(fmt.Sprintf("OriBatch(count=%v)", i), func(b *testing.B) {
-			commitments, openingProofs, _ := ctx.GenTest(blobs[:i], commitments[:i], proofs[:i])
-			b.ReportAllocs()
-			for n := 0; n < b.N; n++ {
-				_ = ctx.OriTest(commitments, openingProofs)
-			}
-		})
-	}
-	for i := 1; i <= len(blobs); i *= 2 {
-		b.Run(fmt.Sprintf("InvBatch(count=%v)", i), func(b *testing.B) {
-			commitments, openingProofs, _ := ctx.GenTest(blobs[:i], commitments[:i], proofs[:i])
-			b.ReportAllocs()
-			for n := 0; n < b.N; n++ {
-				_ = ctx.InvTest(commitments, openingProofs)
-			}
-		})
-	}
-	for i := 1; i <= len(blobs); i *= 2 {
-		b.Run(fmt.Sprintf("NewBatch(count=%v)", i), func(b *testing.B) {
-			commitments, openingProofs, _ := ctx.GenTest(blobs[:i], commitments[:i], proofs[:i])
-			b.ReportAllocs()
-			for n := 0; n < b.N; n++ {
-				_ = ctx.NewTest(commitments, openingProofs)
-			}
-		})
-	}
+	// for i := 1; i <= len(blobs); i *= 2 {
+	// 	b.Run(fmt.Sprintf("OriBatch(count=%v)", i), func(b *testing.B) {
+	// 		commitments, openingProofs, _ := ctx.GenTest(blobs[:i], commitments[:i], proofs[:i])
+	// 		b.ReportAllocs()
+	// 		for n := 0; n < b.N; n++ {
+	// 			_ = ctx.OriTest(commitments, openingProofs)
+	// 		}
+	// 	})
+	// }
+	// for i := 1; i <= len(blobs); i *= 2 {
+	// 	b.Run(fmt.Sprintf("InvBatch(count=%v)", i), func(b *testing.B) {
+	// 		commitments, openingProofs, _ := ctx.GenTest(blobs[:i], commitments[:i], proofs[:i])
+	// 		b.ReportAllocs()
+	// 		for n := 0; n < b.N; n++ {
+	// 			_ = ctx.InvTest(commitments, openingProofs)
+	// 		}
+	// 	})
+	// }
+	// for i := 1; i <= len(blobs); i *= 2 {
+	// 	b.Run(fmt.Sprintf("NewBatch(count=%v)", i), func(b *testing.B) {
+	// 		commitments, openingProofs, _ := ctx.GenTest(blobs[:i], commitments[:i], proofs[:i])
+	// 		b.ReportAllocs()
+	// 		for n := 0; n < b.N; n++ {
+	// 			_ = ctx.NewTest(commitments, openingProofs)
+	// 		}
+	// 	})
+	// }
 
-	for i := 1; i <= len(blobs); i *= 2 {
-		b.Run(fmt.Sprintf("VerifyBlobKZGProofBatch(count=%v)", i), func(b *testing.B) {
-			b.ReportAllocs()
-			for n := 0; n < b.N; n++ {
-				_ = ctx.VerifyBlobKZGProofBatch(blobs[:i], commitments[:i], proofs[:i])
-			}
-		})
-	}
+	// for i := 1; i <= len(blobs); i *= 2 {
+	// 	b.Run(fmt.Sprintf("VerifyBlobKZGProofBatch(count=%v)", i), func(b *testing.B) {
+	// 		b.ReportAllocs()
+	// 		for n := 0; n < b.N; n++ {
+	// 			_ = ctx.VerifyBlobKZGProofBatch(blobs[:i], commitments[:i], proofs[:i])
+	// 		}
+	// 	})
+	// }
 
-	for i := 1; i <= len(blobs); i *= 2 {
-		b.Run(fmt.Sprintf("VerifyBlobKZGProofBatchPar(count=%v)", i), func(b *testing.B) {
-			b.ReportAllocs()
-			for n := 0; n < b.N; n++ {
-				_ = ctx.VerifyBlobKZGProofBatchPar(blobs[:i], commitments[:i], proofs[:i])
-			}
-		})
-	}
+	// for i := 1; i <= len(blobs); i *= 2 {
+	// 	b.Run(fmt.Sprintf("VerifyBlobKZGProofBatchPar(count=%v)", i), func(b *testing.B) {
+	// 		b.ReportAllocs()
+	// 		for n := 0; n < b.N; n++ {
+	// 			_ = ctx.VerifyBlobKZGProofBatchPar(blobs[:i], commitments[:i], proofs[:i])
+	// 		}
+	// 	})
+	// }
 
-	for i := 1; i <= len(blobs); i *= 2 {
+	for i := 2; i <= len(blobs); i *= 2 {
 		b.Run(fmt.Sprintf("OriBatchVerify(count=%d)", i), func(b *testing.B) {
 			
-			commitments, Proofs, _ := ctx.GenBatchTest(blobs[:i], commitments[:i], NumGoRoutines)
+			commitments, Proofs, _ := ctx.GenBatchTest(blobs[:i], commitmentsMono[:i], NumGoRoutines)
 			b.ReportAllocs()
 			for n := 0; n < b.N; n++ {
 				_ = ctx.OriSingleTest(commitments, goethkzg.BatchOpeningProof(Proofs))

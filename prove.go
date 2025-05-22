@@ -33,6 +33,29 @@ func (c *Context) BlobToKZGCommitment(blob *Blob, numGoRoutines int) (KZGCommitm
 	return KZGCommitment(serComm), nil
 }
 
+func (c *Context) BlobToKZGCommitmentMonomial(blob *Blob, numGoRoutines int) (KZGCommitment, error) {
+	// 1. Deserialization
+	//
+	// Deserialize blob into polynomial
+	polynomial, err := DeserializeBlob(blob)
+	if err != nil {
+		return KZGCommitment{}, err
+	}
+
+	// 2. Commit to polynomial
+	commitment, err := kzg.Commit(polynomial, c.commitKeyMonomial, numGoRoutines)
+	if err != nil {
+		return KZGCommitment{}, err
+	}
+
+	// 3. Serialization
+	//
+	// Serialize commitment
+	serComm := SerializeG1Point(*commitment)
+
+	return KZGCommitment(serComm), nil
+}
+
 // ComputeBlobKZGProof implements [compute_blob_kzg_proof]. It takes a blob and returns the KZG proof that is used to
 // verify it against the given KZG commitment at a random point.
 //
