@@ -2,6 +2,7 @@ package kzg
 
 import (
 	"crypto/sha256"
+	"fmt"
 
 	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
 	"github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
@@ -13,6 +14,16 @@ func OriBatchOpen(commitments []bls12381.G1Affine, p []Polynomial, z []fr.Elemen
 		return BatchOpeningProof{}, ErrInvalidPolynomialSize
 	}
 
+	// Add before calling OriBatchOpen or at the start of OriBatchOpen
+	if len(commitments) != len(p) || len(p) != len(z) {
+		panic(fmt.Sprintf("Input slices must have the same length: commitments=%d, p=%d, z=%d", len(commitments), len(p), len(z)))
+	}
+	for i := range p {
+		if len(p[i]) != len(p[0]) {
+			panic(fmt.Sprintf("All polynomials must have the same length: p[%d]=%d, p[0]=%d", i, len(p[i]), len(p[0])))
+		}
+	}
+
 	//y[i] = f_i(z_i)
 	y := make([]fr.Element, len(z))
 
@@ -21,7 +32,9 @@ func OriBatchOpen(commitments []bls12381.G1Affine, p []Polynomial, z []fr.Elemen
 	}
 
 	// ∑_{i=1}^k q_i(x)
-	q := make([]fr.Element, len(z))
+	//q := make([]fr.Element, len(z))
+	// With this:
+	q := make([]fr.Element, len(p[0]))
 
 	// q_i(x)
 	q_ := make([][]fr.Element, len(z))
@@ -89,7 +102,8 @@ func OriBatchOpen(commitments []bls12381.G1Affine, p []Polynomial, z []fr.Elemen
 	var t fr.Element
 	t.SetBytes(digest1[:])
 
-	q = make([]fr.Element, len(q_))
+	//q = make([]fr.Element, len(q_))
+	q = make([]fr.Element, len(p[0]))
 
 	// ∑_{i=1}^k r_i*q_i(x)/(t-z_i)
 	for i := range q_ {
@@ -137,7 +151,9 @@ func BatchOpen(commitments []bls12381.G1Affine, p []Polynomial, z []fr.Element, 
 	}
 
 	// ∑_{i=1}^k q_i(x)
-	q := make([]fr.Element, len(z))
+	//q := make([]fr.Element, len(z))
+	// With this:
+	q := make([]fr.Element, len(p[0]))
 
 	// q_i(x)
 	q_ := make([][]fr.Element, len(z))
@@ -184,7 +200,8 @@ func BatchOpen(commitments []bls12381.G1Affine, p []Polynomial, z []fr.Element, 
 	var t fr.Element
 	t.SetBytes(digest[:])
 
-	q = make([]fr.Element, len(q_))
+	//q = make([]fr.Element, len(q_))
+	q = make([]fr.Element, len(p[0]))
 
 	// ∑_{i=1}^k q_i(x)/(t-z_i)
 	for i := range q_ {

@@ -357,7 +357,7 @@ func (c *Context) GenTest(blobs []Blob, polynomialCommitments []KZGCommitment, k
 	return commitments, openingProofs, nil
 }
 
-func (c *Context) GenBatchTest(blobs []Blob, polynomialCommitments []KZGCommitment, numGoRoutines int) ([]bls12381.G1Affine, kzg.BatchOpeningProof, error) {
+func (c *Context) GenOriBatchTest(blobs []Blob, polynomialCommitments []KZGCommitment, numGoRoutines int) ([]bls12381.G1Affine, kzg.BatchOpeningProof, error) {
 	blobsLen := len(blobs)
 	batchSize := blobsLen
 
@@ -395,6 +395,44 @@ func (c *Context) GenBatchTest(blobs []Blob, polynomialCommitments []KZGCommitme
 	return commitments, proof, nil
 }
 
+func (c *Context) OriBatchTest(blobs []Blob, polynomialCommitments []KZGCommitment, numGoRoutines int) ([]bls12381.G1Affine, kzg.BatchOpeningProof, error) {
+	blobsLen := len(blobs)
+	batchSize := blobsLen
+
+	polynomials := make([]kzg.Polynomial, batchSize)
+	z := make([]fr.Element, batchSize)
+	commitments := make([]bls12381.G1Affine, batchSize)
+
+	for i := 0; i < batchSize; i++ {
+		// 2a. Deserialize
+		//
+		serComm := polynomialCommitments[i]
+		polynomialCommitment, err := DeserializeKZGCommitment(serComm)
+		if err != nil {
+			return nil, kzg.BatchOpeningProof{}, err
+		}
+
+		blob := &blobs[i]
+		polynomial, err := DeserializeBlob(blob)
+		if err != nil {
+			return nil, kzg.BatchOpeningProof{}, err
+		}
+		polynomials[i] = polynomial
+
+		// 2b. Compute the evaluation challenge
+		evaluationChallenge := computeChallenge(blob, serComm)
+		z[i] = evaluationChallenge
+
+		commitments[i] = polynomialCommitment
+	}
+
+	proof, err := kzg.BatchOpen(commitments, polynomials, z, c.commitKeyMonomial, numGoRoutines)
+	if err != nil {
+		return nil, kzg.BatchOpeningProof{}, err
+	}
+	return commitments, proof, nil
+}
+
 func (c *Context) OriTest(commitments []bls12381.G1Affine, openingProofs []kzg.OpeningProof) error {
 	return kzg.BatchVerifyMultiPoints(commitments, openingProofs, c.openKey)
 }
@@ -416,6 +454,17 @@ func (c *Context) OriSingleTest(commitments []bls12381.G1Affine, openingProofs B
 		ClaimedValue:        openingProofs.ClaimedValue,
 	}
 	return kzg.OriBatchVerify(commitments, kzgOpeningProofs, c.openKey)
+}
+
+func (c *Context) SingleTest(commitments []bls12381.G1Affine, openingProofs BatchOpeningProof) error {
+	// Convert local BatchOpeningProof to kzg.BatchOpeningProof
+	kzgOpeningProofs := kzg.BatchOpeningProof{
+		QuotientCommitmentW: openingProofs.QuotientCommitmentW,
+		QuotientCommitmentX: openingProofs.QuotientCommitmentX,
+		InputPoint:          openingProofs.InputPoint,
+		ClaimedValue:        openingProofs.ClaimedValue,
+	}
+	return kzg.BatchVerify(commitments, kzgOpeningProofs, c.openKey)
 }
 
 // VerifyBlobKZGProofBatchPar implements [verify_blob_kzg_proof_batch]. This is the parallelized version of

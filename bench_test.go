@@ -361,13 +361,26 @@ func Benchmark(b *testing.B) {
 	// 	})
 	// }
 
-	for i := 2; i <= len(blobs); i *= 2 {
+	for i := 1; i <= len(blobs); i *= 2 {
+		i := i // capture loop variable
 		b.Run(fmt.Sprintf("OriBatchVerify(count=%d)", i), func(b *testing.B) {
 			
-			commitments, Proofs, _ := ctx.GenBatchTest(blobs[:i], commitmentsMono[:i], NumGoRoutines)
+			commitments, Proofs, _ := ctx.GenOriBatchTest(blobs[:i], commitmentsMono[:i], NumGoRoutines)
 			b.ReportAllocs()
 			for n := 0; n < b.N; n++ {
 				_ = ctx.OriSingleTest(commitments, goethkzg.BatchOpeningProof(Proofs))
+			}
+		})
+	}
+
+	for i := 1; i <= len(blobs); i *= 2 {
+		i := i // capture loop variable
+		b.Run(fmt.Sprintf("BatchVerify(count=%d)", i), func(b *testing.B) {
+			
+			commitments, Proofs, _ := ctx.OriBatchTest(blobs[:i], commitmentsMono[:i], NumGoRoutines)
+			b.ReportAllocs()
+			for n := 0; n < b.N; n++ {
+				_ = ctx.SingleTest(commitments, goethkzg.BatchOpeningProof(Proofs))
 			}
 		})
 	}
