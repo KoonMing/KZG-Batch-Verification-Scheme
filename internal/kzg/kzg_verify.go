@@ -15,8 +15,8 @@ import (
 var (
 	//ErrInvalidNumDigests   = errors.New("number of commitments does not match number of proofs")
 	//ErrVerifyOpeningProof  = errors.New("failed to verify opening proof")
-	ErrZeroDivision        = errors.New("division by zero in proof verification")
-	ErrInvalidProof        = errors.New("invalid proof format")
+	ErrZeroDivision     = errors.New("division by zero in proof verification")
+	ErrInvalidProof     = errors.New("invalid proof format")
 	ErrInvalidNumProofs = errors.New("number of commitments and proofs do not match")
 	ErrVerifyOpening    = errors.New("failed to verify the batch opening proof")
 )
@@ -554,6 +554,7 @@ func NewBatchVerifyMultiPoints(commitments []Commitment, proofs []OpeningProof, 
 	return nil
 }
 
+// Single user batch verification
 func BatchVerify(commitments []bls12381.G1Affine, proofs BatchOpeningProof, openKey *OpeningKey) error {
 	// InputPoint:   z,
 	// ClaimedValue: y,

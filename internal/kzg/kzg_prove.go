@@ -78,7 +78,7 @@ func OriBatchOpen(commitments []bls12381.G1Affine, p []Polynomial, z []fr.Elemen
 	rPowers := utils.ComputePowers(r, uint(len(commitments)))
 
 	// assuming all polys same degree, pad if needed
-	riqi := make([]fr.Element, len(p[0])) 
+	riqi := make([]fr.Element, len(p[0]))
 
 	for i := range q_ {
 		for j := range q_[i] {
@@ -115,9 +115,9 @@ func OriBatchOpen(commitments []bls12381.G1Affine, p []Polynomial, z []fr.Elemen
 			//temp.Mul(&q_[i][j], &temp)
 			// q[j].Add(&q[j], new(fr.Element).Mul(&q_[i][j], &temp2))
 			temp2 := new(fr.Element).Mul(&q_[i][j], &rPowers[i])
-			temp2.Mul(temp2, &temp)                            
-			q[j].Add(&q[j], temp2) 
-			
+			temp2.Mul(temp2, &temp)
+			q[j].Add(&q[j], temp2)
+
 		}
 	}
 
@@ -138,6 +138,7 @@ func OriBatchOpen(commitments []bls12381.G1Affine, p []Polynomial, z []fr.Elemen
 	return res, nil
 }
 
+// Single user batch opening using Monomial basis
 func BatchOpen(commitments []bls12381.G1Affine, p []Polynomial, z []fr.Element, ck *CommitKey, numGoRoutines int) (BatchOpeningProof, error) {
 	if len(p) == 0 || len(p) > len(ck.G1) {
 		return BatchOpeningProof{}, ErrInvalidPolynomialSize
@@ -265,6 +266,101 @@ func dividePolyByXminusA(f []fr.Element, fa, a fr.Element) []fr.Element {
 
 	// the result is of degree deg(f)-1
 	return q[1:]
+}
+
+// Single user batch opening using Lagrange basis
+func LagrangeBatchOpen(domain *Domain, commitments []bls12381.G1Affine, p []Polynomial, z []fr.Element, ck *CommitKey, numGoRoutines int) (BatchOpeningProof, error) {
+	if len(p) == 0 || len(p) > len(ck.G1) {
+		return BatchOpeningProof{}, ErrInvalidPolynomialSize
+	}
+
+	//y[i] = f_i(z_i)
+	y := make([]fr.Element, len(z))
+	// ∑_{i=1}^k q_i(x)
+	//q := make([]fr.Element, len(z))
+	// With this:
+	q := make([]fr.Element, len(p[0]))
+
+	// q_i(x)
+	q_ := make([]Polynomial, len(z))
+
+	for i := range p {
+		tmp, indexInDomain, err := domain.evaluateLagrangePolynomial(p[i], z[i])
+		if err != nil {
+			return BatchOpeningProof{}, err
+		}
+		y[i] = *tmp
+
+		temp, erro := domain.computeQuotientPoly(p[i], indexInDomain, y[i], z[i])
+		if erro != nil {
+			return BatchOpeningProof{}, erro
+		}
+		q_[i] = temp
+
+		//assume same degree
+		for j := range q_[i] {
+			q[j].Add(&q[j], &q_[i][j])
+		}
+	}
+
+	//W = G^{∑_{i=1}^k q_i(x)}
+	W, err := Commit(q, ck, numGoRoutines)
+	if err != nil {
+		return BatchOpeningProof{}, err
+	}
+
+	//t=H({C_i},{z_i},{f_i(z_i)},W)
+	var buf []byte
+
+	for _, C_i := range commitments {
+		buf = append(buf, C_i.Marshal()...)
+	}
+
+	for _, z_i := range z {
+		buf = append(buf, z_i.Marshal()...)
+	}
+
+	for _, y_i := range y {
+		buf = append(buf, y_i.Marshal()...)
+	}
+
+	h := sha256.New()
+	h.Write(buf)
+	h.Write(W.Marshal()[:])
+
+	digest := h.Sum(nil)
+	var t fr.Element
+	t.SetBytes(digest[:])
+
+	//q = make([]fr.Element, len(q_))
+	q = make([]fr.Element, len(p[0]))
+
+	// ∑_{i=1}^k q_i(x)/(t-z_i)
+	for i := range q_ {
+		var temp fr.Element
+		temp.Sub(&t, &z[i])
+		temp.Inverse(&temp)
+
+		for j := range q_[i] {
+			q[j].Add(&q[j], new(fr.Element).Mul(&q_[i][j], &temp))
+		}
+	}
+
+	//X = G^{∑_{i=1}^k q_i(x)/(t-z_i)}
+	X, err := Commit(q, ck, numGoRoutines)
+	if err != nil {
+		return BatchOpeningProof{}, err
+	}
+
+	res := BatchOpeningProof{
+		InputPoint:   z,
+		ClaimedValue: y,
+	}
+
+	res.QuotientCommitmentW.Set(W)
+	res.QuotientCommitmentX.Set(X)
+
+	return res, nil
 }
 
 // Open verifies that a polynomial f(x) when evaluated at a point `z` is equal to `f(z)`
