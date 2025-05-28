@@ -377,7 +377,7 @@ func Benchmark(b *testing.B) {
 		i := i // capture loop variable
 		b.Run(fmt.Sprintf("LagrangeOriBatchVerify(count=%d)", i), func(b *testing.B) {
 			
-			commitments, Proofs, _ := ctx.GenLagrangeOriBatchTest(blobs[:i], commitmentsMono[:i], NumGoRoutines)
+			commitments, Proofs, _ := ctx.GenLagrangeOriBatchTest(blobs[:i], commitments[:i], NumGoRoutines)
 			b.ReportAllocs()
 			for n := 0; n < b.N; n++ {
 				_ = ctx.OriSingleTest(commitments, goethkzg.BatchOpeningProof(Proofs))
