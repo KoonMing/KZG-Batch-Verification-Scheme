@@ -61,6 +61,10 @@ func TestLagrangeBatchVerify(t *testing.T) {
 	err := BatchVerify(commitments, proofs, &srs.OpeningKey)
 	require.NoError(t, err)
 
+	proofs, _ = LagrangeOriBatchOpen(domain, commitments, poly, z, &srs.CommitKey, 0)
+	err = OriBatchVerify(commitments, proofs, &srs.OpeningKey)
+	require.NoError(t, err)
+
 	// Add an invalid proof, to ensure that it fails
 	poly[0] = randPoly(t, *domain)
 	proofs, _ = LagrangeBatchOpen(domain, commitments, poly, z, &srs.CommitKey, 0)

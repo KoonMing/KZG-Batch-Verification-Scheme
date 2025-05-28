@@ -395,6 +395,44 @@ func (c *Context) GenOriBatchTest(blobs []Blob, polynomialCommitments []KZGCommi
 	return commitments, proof, nil
 }
 
+func (c *Context) GenLagrangeOriBatchTest(blobs []Blob, polynomialCommitments []KZGCommitment, numGoRoutines int) ([]bls12381.G1Affine, kzg.BatchOpeningProof, error) {
+	blobsLen := len(blobs)
+	batchSize := blobsLen
+
+	polynomials := make([]kzg.Polynomial, batchSize)
+	z := make([]fr.Element, batchSize)
+	commitments := make([]bls12381.G1Affine, batchSize)
+
+	for i := 0; i < batchSize; i++ {
+		// 2a. Deserialize
+		//
+		serComm := polynomialCommitments[i]
+		polynomialCommitment, err := DeserializeKZGCommitment(serComm)
+		if err != nil {
+			return nil, kzg.BatchOpeningProof{}, err
+		}
+
+		blob := &blobs[i]
+		polynomial, err := DeserializeBlob(blob)
+		if err != nil {
+			return nil, kzg.BatchOpeningProof{}, err
+		}
+		polynomials[i] = polynomial
+
+		// 2b. Compute the evaluation challenge
+		evaluationChallenge := computeChallenge(blob, serComm)
+		z[i] = evaluationChallenge
+
+		commitments[i] = polynomialCommitment
+	}
+
+	proof, err := kzg.LagrangeBatchOpen(c.domain,commitments, polynomials, z, c.commitKeyLagrange, numGoRoutines)
+	if err != nil {
+		return nil, kzg.BatchOpeningProof{}, err
+	}
+	return commitments, proof, nil
+}
+
 func (c *Context) OriBatchTest(blobs []Blob, polynomialCommitments []KZGCommitment, numGoRoutines int) ([]bls12381.G1Affine, kzg.BatchOpeningProof, error) {
 	blobsLen := len(blobs)
 	batchSize := blobsLen
@@ -427,6 +465,44 @@ func (c *Context) OriBatchTest(blobs []Blob, polynomialCommitments []KZGCommitme
 	}
 
 	proof, err := kzg.BatchOpen(commitments, polynomials, z, c.commitKeyMonomial, numGoRoutines)
+	if err != nil {
+		return nil, kzg.BatchOpeningProof{}, err
+	}
+	return commitments, proof, nil
+}
+
+func (c *Context) LagrangeOriBatchTest(blobs []Blob, polynomialCommitments []KZGCommitment, numGoRoutines int) ([]bls12381.G1Affine, kzg.BatchOpeningProof, error) {
+	blobsLen := len(blobs)
+	batchSize := blobsLen
+
+	polynomials := make([]kzg.Polynomial, batchSize)
+	z := make([]fr.Element, batchSize)
+	commitments := make([]bls12381.G1Affine, batchSize)
+
+	for i := 0; i < batchSize; i++ {
+		// 2a. Deserialize
+		//
+		serComm := polynomialCommitments[i]
+		polynomialCommitment, err := DeserializeKZGCommitment(serComm)
+		if err != nil {
+			return nil, kzg.BatchOpeningProof{}, err
+		}
+
+		blob := &blobs[i]
+		polynomial, err := DeserializeBlob(blob)
+		if err != nil {
+			return nil, kzg.BatchOpeningProof{}, err
+		}
+		polynomials[i] = polynomial
+
+		// 2b. Compute the evaluation challenge
+		evaluationChallenge := computeChallenge(blob, serComm)
+		z[i] = evaluationChallenge
+
+		commitments[i] = polynomialCommitment
+	}
+
+	proof, err := kzg.LagrangeBatchOpen(c.domain,commitments, polynomials, z, c.commitKeyLagrange, numGoRoutines)
 	if err != nil {
 		return nil, kzg.BatchOpeningProof{}, err
 	}

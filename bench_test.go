@@ -375,9 +375,33 @@ func Benchmark(b *testing.B) {
 
 	for i := 1; i <= len(blobs); i *= 2 {
 		i := i // capture loop variable
+		b.Run(fmt.Sprintf("LagrangeOriBatchVerify(count=%d)", i), func(b *testing.B) {
+			
+			commitments, Proofs, _ := ctx.GenLagrangeOriBatchTest(blobs[:i], commitmentsMono[:i], NumGoRoutines)
+			b.ReportAllocs()
+			for n := 0; n < b.N; n++ {
+				_ = ctx.OriSingleTest(commitments, goethkzg.BatchOpeningProof(Proofs))
+			}
+		})
+	}
+
+	for i := 1; i <= len(blobs); i *= 2 {
+		i := i // capture loop variable
 		b.Run(fmt.Sprintf("BatchVerify(count=%d)", i), func(b *testing.B) {
 			
 			commitments, Proofs, _ := ctx.OriBatchTest(blobs[:i], commitmentsMono[:i], NumGoRoutines)
+			b.ReportAllocs()
+			for n := 0; n < b.N; n++ {
+				_ = ctx.SingleTest(commitments, goethkzg.BatchOpeningProof(Proofs))
+			}
+		})
+	}
+
+	for i := 1; i <= len(blobs); i *= 2 {
+		i := i // capture loop variable
+		b.Run(fmt.Sprintf("LagrangeBatchVerify(count=%d)", i), func(b *testing.B) {
+			
+			commitments, Proofs, _ := ctx.LagrangeOriBatchTest(blobs[:i], commitments[:i], NumGoRoutines)
 			b.ReportAllocs()
 			for n := 0; n < b.N; n++ {
 				_ = ctx.SingleTest(commitments, goethkzg.BatchOpeningProof(Proofs))
