@@ -3,6 +3,7 @@ package kzg
 import (
 	"crypto/sha256"
 	"fmt"
+	"sync"
 
 	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
 	"github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
@@ -170,6 +171,130 @@ func LagrangeOriBatchOpen(domain *Domain, commitments []bls12381.G1Affine, p []P
 		for j := range q_[i] {
 			q[j].Add(&q[j], &q_[i][j])
 		}
+	}
+
+	//r=H({C_i},{z_i},{f_i(z_i)})
+	var buf []byte
+
+	for _, C_i := range commitments {
+		buf = append(buf, C_i.Marshal()...)
+	}
+
+	for _, z_i := range z {
+		buf = append(buf, z_i.Marshal()...)
+	}
+
+	for _, y_i := range y {
+		buf = append(buf, y_i.Marshal()...)
+	}
+
+	h := sha256.New()
+	h.Write(buf)
+
+	digest := h.Sum(nil)
+	var r fr.Element
+	r.SetBytes(digest[:])
+
+	// Compute r_i
+	rPowers := utils.ComputePowers(r, uint(len(commitments)))
+
+	// assuming all polys same degree, pad if needed
+	riqi := make([]fr.Element, len(p[0]))
+
+	for i := range q_ {
+		for j := range q_[i] {
+			tmp := new(fr.Element).Mul(&q_[i][j], &rPowers[i])
+			riqi[j].Add(&riqi[j], tmp)
+		}
+	}
+
+	//W = G^{∑_{i=1}^k r_i*q_i(x)}
+	W, err := Commit(riqi, ck, numGoRoutines)
+	if err != nil {
+		return BatchOpeningProof{}, err
+	}
+
+	//t=H(r,W)
+	h1 := sha256.New()
+	h1.Write(r.Marshal()[:])
+	h1.Write(W.Marshal()[:])
+
+	digest1 := h1.Sum(nil)
+	var t fr.Element
+	t.SetBytes(digest1[:])
+
+	//q = make([]fr.Element, len(q_))
+	q = make([]fr.Element, len(p[0]))
+
+	// ∑_{i=1}^k r_i*q_i(x)/(t-z_i)
+	for i := range q_ {
+		var temp fr.Element
+		temp.Sub(&t, &z[i])
+		temp.Inverse(&temp)
+
+		for j := range q_[i] {
+			//temp.Mul(&q_[i][j], &temp)
+			// q[j].Add(&q[j], new(fr.Element).Mul(&q_[i][j], &temp2))
+			temp2 := new(fr.Element).Mul(&q_[i][j], &rPowers[i])
+			temp2.Mul(temp2, &temp)
+			q[j].Add(&q[j], temp2)
+
+		}
+	}
+
+	//X = G^{∑_{i=1}^k r_i*q_i(x)/(t-z_i)}
+	X, err := Commit(q, ck, numGoRoutines)
+	if err != nil {
+		return BatchOpeningProof{}, err
+	}
+
+	res := BatchOpeningProof{
+		InputPoint:   z,
+		ClaimedValue: y,
+	}
+
+	res.QuotientCommitmentW.Set(W)
+	res.QuotientCommitmentX.Set(X)
+
+	return res, nil
+}
+
+func OptimisedLagrangeOriBatchOpen(domain *Domain, commitments []bls12381.G1Affine, p []Polynomial, z []fr.Element, ck *CommitKey, numGoRoutines int) (BatchOpeningProof, error) {
+	if len(p) == 0 || len(p) > len(ck.G1) {
+		return BatchOpeningProof{}, ErrInvalidPolynomialSize
+	}
+
+	//y[i] = f_i(z_i)
+	y := make([]fr.Element, len(z))
+	// ∑_{i=1}^k q_i(x)
+	//q := make([]fr.Element, len(z))
+	// With this:
+	q := make([]fr.Element, len(p[0]))
+
+	// q_i(x)
+	q_ := make([]Polynomial, len(z))
+
+	var wg sync.WaitGroup
+	for i := range p {
+    	wg.Add(1)
+    	go func(i int) {
+        	defer wg.Done()
+        	tmp, indexInDomain, err := domain.evaluateLagrangePolynomial(p[i], z[i])
+        	if err != nil { /* handle error, e.g. send to channel */ return }
+        	y[i] = *tmp
+
+        	temp, erro := domain.computeQuotientPoly(p[i], indexInDomain, y[i], z[i])
+        	if erro != nil { /* handle error */ return }
+        	q_[i] = temp
+    	}(i)
+	}
+	wg.Wait()
+
+	// Then sum q_[i] into q as before
+	for i := range q_ {
+    	for j := range q_[i] {
+        	q[j].Add(&q[j], &q_[i][j])
+    	}
 	}
 
 	//r=H({C_i},{z_i},{f_i(z_i)})

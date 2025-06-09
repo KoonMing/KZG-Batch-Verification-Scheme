@@ -61,8 +61,8 @@ func TestLagrangeBatchVerify(t *testing.T) {
 	err := BatchVerify(commitments, proofs, &srs.OpeningKey)
 	require.NoError(t, err)
 
-	proofs, _ = LagrangeOriBatchOpen(domain, commitments, poly, z, &srs.CommitKey, 0)
-	err = OriBatchVerify(commitments, proofs, &srs.OpeningKey)
+	proofs, _ = OptimisedLagrangeOriBatchOpen(domain, commitments, poly, z, &srs.CommitKey, 0)
+	err = OptimisedOriBatchVerify(commitments, proofs, &srs.OpeningKey)
 	require.NoError(t, err)
 
 	// Add an invalid proof, to ensure that it fails

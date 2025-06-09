@@ -426,7 +426,7 @@ func (c *Context) GenLagrangeOriBatchTest(blobs []Blob, polynomialCommitments []
 		commitments[i] = polynomialCommitment
 	}
 
-	proof, err := kzg.LagrangeBatchOpen(c.domain,commitments, polynomials, z, c.commitKeyLagrange, numGoRoutines)
+	proof, err := kzg.LagrangeOriBatchOpen(c.domain,commitments, polynomials, z, c.commitKeyLagrange, numGoRoutines)
 	if err != nil {
 		return nil, kzg.BatchOpeningProof{}, err
 	}

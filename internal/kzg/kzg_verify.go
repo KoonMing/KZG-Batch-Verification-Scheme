@@ -1,10 +1,12 @@
 package kzg
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"errors"
 	"math/big"
 	"math/rand"
+	"sync"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
@@ -675,6 +677,93 @@ func OriBatchVerify(commitments []bls12381.G1Affine, proofs BatchOpeningProof, o
 		t_i[i].Mul(&t_i[i], &rPowers[i])
 		//Sum.Add(&Sum, new(fr.Element).Mul(&t_i[i], &proofs.ClaimedValue[i]))
 	}
+
+	// \prod_{i=1}^k C_i^{t_i}
+	var LHS bls12381.G1Affine
+	if _, err := LHS.MultiExp(commitments, t_i, ecc.MultiExpConfig{}); err != nil {
+		return err
+	}
+
+	// Sum = ∑_{i=1}^k y_i/t_i
+	for i := range t_i {
+		Sum.Add(&Sum, new(fr.Element).Mul(&t_i[i], &proofs.ClaimedValue[i]))
+	}
+
+	var sum big.Int
+	Sum.BigInt(&sum)
+	LHS.Sub(&LHS, new(bls12381.G1Affine).ScalarMultiplicationBase(&sum))
+	LHS.Sub(&LHS, &proofs.QuotientCommitmentW)
+
+	var temp big.Int
+	t.BigInt(&temp)
+	LHS.Add(&LHS, new(bls12381.G1Affine).ScalarMultiplication(&proofs.QuotientCommitmentX, &temp))
+
+	var RHS bls12381.G1Affine
+	RHS.Neg(&proofs.QuotientCommitmentX)
+
+	check, err := bls12381.PairingCheck(
+		[]bls12381.G1Affine{LHS, RHS},
+		[]bls12381.G2Affine{openKey.GenG2, openKey.AlphaG2},
+	)
+	if err != nil {
+		return err
+	}
+	if !check {
+		return ErrVerifyOpeningProof
+	}
+
+	return nil
+}
+
+func OptimisedOriBatchVerify(commitments []bls12381.G1Affine, proofs BatchOpeningProof, openKey *OpeningKey) error {
+	// InputPoint:   z,
+	// ClaimedValue: y,
+	// r=H({C_i},{z_i},{f_i(z_i)})
+	var buf bytes.Buffer
+
+	for _, C_i := range commitments {
+    	buf.Write(C_i.Marshal())
+	}
+	for _, z_i := range proofs.InputPoint {
+    	buf.Write(z_i.Marshal())
+	}
+	for _, y_i := range proofs.ClaimedValue {
+    	buf.Write(y_i.Marshal())
+	}
+	h := sha256.New()
+	h.Write(buf.Bytes())
+	//h.Write(proofs.QuotientCommitmentW.Marshal()[:])
+
+	digest := h.Sum(nil)
+	var r fr.Element
+	r.SetBytes(digest[:])
+
+	// Compute r_i
+	rPowers := utils.ComputePowers(r, uint(len(commitments)))
+
+	//t=H(r,W)
+	h1 := sha256.New()
+	h1.Write(r.Marshal()[:])
+	h1.Write(proofs.QuotientCommitmentW.Marshal()[:])
+
+	digest1 := h1.Sum(nil)
+	var t fr.Element
+	t.SetBytes(digest1[:])
+
+	// t_i =  r_i/(t-z_i)
+	var Sum fr.Element
+	t_i := make([]fr.Element, len(proofs.InputPoint))
+	var wg sync.WaitGroup
+	for i := range t_i {
+    	wg.Add(1)
+    	go func(i int) {
+        	defer wg.Done()
+        	t_i[i].Sub(&t, &proofs.InputPoint[i])
+        	t_i[i].Inverse(&t_i[i])
+        	t_i[i].Mul(&t_i[i], &rPowers[i])
+    	}(i)
+	}
+	wg.Wait()
 
 	// \prod_{i=1}^k C_i^{t_i}
 	var LHS bls12381.G1Affine
